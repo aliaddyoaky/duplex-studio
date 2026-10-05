@@ -1,5 +1,6 @@
 import type { RuntimeEvent } from '../shared/events.js';
 import type { Artifact, IntentPatch, ProjectState, TaskRecord } from '../shared/schemas.js';
+import type { Asset } from '../shared/schemas.js';
 import type { TaskGraph } from '../server/runtime/taskGraph.js';
 
 export type DemoMode = 'LIVE' | 'HYBRID' | 'REPLAY';
@@ -56,6 +57,28 @@ export async function retryTask(taskId: string): Promise<TaskRecord> {
 
 export async function fetchHistory(version?: number): Promise<HistorySummary[] | Record<string, unknown>> {
   return requestJson(version === undefined ? '/api/project/history' : `/api/project/history/${version}`);
+}
+
+export async function fetchAssets(query?: string): Promise<Asset[]> {
+  const response = await requestJson<Asset[] | Array<{ id: string; type: Asset['type']; uri: string; tags: string[] }>>(
+    query ? `/api/assets?query=${encodeURIComponent(query)}` : '/api/assets',
+  );
+  return response.map((asset) => ({ id: asset.id, type: asset.type, uri: asset.uri, tags: asset.tags }));
+}
+
+export async function uploadAsset(file: File): Promise<Asset> {
+  const bytes = await file.arrayBuffer();
+  const response = await fetch('/api/assets/upload', {
+    method: 'POST',
+    headers: { 'content-type': file.type || 'application/octet-stream', 'x-filename': file.name },
+    body: bytes,
+  });
+  if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+  return (await response.json()) as Asset;
+}
+
+export async function updateAssetTags(id: string, tags: string[]): Promise<Asset> {
+  return requestJson<Asset>(`/api/assets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify({ tags }) });
 }
 
 export async function resetDemo(): Promise<{ sessionEpoch: number; abortedTasks: number }> {

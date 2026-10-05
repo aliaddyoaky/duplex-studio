@@ -75,7 +75,7 @@ const orchestrator = new DemoOrchestrator({
   replayCatalog,
   fallbackVideoByScene,
   allowHybridFallback: true,
-  delayResult: createCancellationReleasedDelay({ taskType: 'script', stateVersion: 1 }),
+  delayResult: createCancellationReleasedDelay({ taskType: 'generated_scene:scene_3', stateVersion: 1 }),
 });
 const allLiveProvidersReady = Boolean(
   config.server.geminiApiKey && config.server.deepseekApiKey && config.server.minimaxApiKey,

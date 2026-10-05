@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
-import { confirmScript, createProject, resetDemo, retryTask, setDemoMode, type DemoMode } from './api.js';
+import { applyIntentPatch, confirmScript, createProject, fetchAssets, resetDemo, retryTask, setDemoMode, type DemoMode } from './api.js';
+import type { Asset } from '../shared/schemas.js';
 import { runGoldenReplay } from './replayGoldenPath.js';
 import { AgentBrain } from './components/AgentBrain.js';
 import { CreativeCanvas } from './components/CreativeCanvas.js';
@@ -8,6 +9,8 @@ import { Metrics } from './components/Metrics.js';
 import { RealtimePanel } from './components/RealtimePanel.js';
 import { StateDiff } from './components/StateDiff.js';
 import { Timeline } from './components/Timeline.js';
+import { AssetLibrary } from './components/AssetLibrary.js';
+import { HistoryPanel } from './components/HistoryPanel.js';
 import { selectMetrics, selectStateDiff, useDemoStore } from './state/useDemoStore.js';
 
 const GOLDEN_BRIEF = {
@@ -20,6 +23,7 @@ const GOLDEN_BRIEF = {
 export function App() {
   const { state, refresh, dispatch } = useDemoStore();
   const [busy, setBusy] = useState(false);
+  const [assets, setAssets] = useState<Asset[]>([]);
   const snapshot = state.snapshot;
   const mode = snapshot?.mode ?? 'LIVE';
 
@@ -58,6 +62,17 @@ export function App() {
     try { await confirmScript(); await refresh(); } finally { setBusy(false); }
   };
 
+  const createFromBrief = async (brief: typeof GOLDEN_BRIEF) => {
+    setBusy(true);
+    try { await createProject(brief); await refresh(); } finally { setBusy(false); }
+  };
+
+  const changeSource = async (sceneId: string, source: 'generated_video' | 'existing_asset') => {
+    if (!snapshot?.state) return;
+    await applyIntentPatch({ patchId: `source_${Date.now()}`, baseVersion: snapshot.state.version, changes: { [`scenes.${sceneId}.source`]: source }, userSummary: `${sceneId} 使用${source === 'existing_asset' ? '真实素材' : 'AI 生成'}` });
+    await refresh();
+  };
+
   const retry = async (taskId: string) => {
     await retryTask(taskId);
     await refresh();
@@ -67,6 +82,11 @@ export function App() {
     await setDemoMode(next);
     await refresh();
   };
+
+  const refreshAssets = async () => {
+    try { setAssets(await fetchAssets()); } catch { /* asset library is optional during runtime startup */ }
+  };
+  useEffect(() => { void refreshAssets(); }, []);
 
   return (
     <main className="studio-shell">
@@ -96,12 +116,8 @@ export function App() {
       {state.error && <div className="global-error">运行时：{state.error}</div>}
 
       <div className="studio-grid">
-        <RealtimePanel
-          stateVersion={snapshot?.state?.version ?? 0}
-          runtimeConnected={state.runtimeConnected}
-          onProjectChanged={() => void refresh()}
-        />
-        <CreativeCanvas state={snapshot?.state ?? null} tasks={snapshot?.tasks ?? []} artifacts={snapshot?.artifacts ?? []} />
+        <div className="left-column"><RealtimePanel stateVersion={snapshot?.state?.version ?? 0} runtimeConnected={state.runtimeConnected} onProjectChanged={() => void refresh()} onConfirmScript={() => void confirm()} /><AssetLibrary assets={assets} onChanged={() => void refreshAssets()} /></div>
+        <CreativeCanvas state={snapshot?.state ?? null} tasks={snapshot?.tasks ?? []} artifacts={snapshot?.artifacts ?? []} onCreateProject={(brief) => void createFromBrief(brief)} onConfirmScript={() => void confirm()} onChangeSource={(sceneId, source) => void changeSource(sceneId, source)} busy={busy} />
         <AgentBrain
           tasks={snapshot?.tasks ?? []}
           events={state.events}
@@ -115,6 +131,7 @@ export function App() {
           <div className="observatory-side">
             <Metrics metrics={selectMetrics(state)} />
             <StateDiff entries={selectStateDiff(state)} />
+            <HistoryPanel projectVersion={snapshot?.state?.version ?? 0} />
           </div>
         </section>
       </div>
