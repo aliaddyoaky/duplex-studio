@@ -1,4 +1,6 @@
 import request from 'supertest';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { describe, expect, it, vi } from 'vitest';
 
 import goldenProject from '../demo/fixtures/golden-project.json';
@@ -8,6 +10,8 @@ import { ReplayCatalog } from '../src/server/demo/replay.js';
 import { VideoGenerationError, type VideoArtifact, type VideoProvider } from '../src/server/providers/videoProvider.js';
 import { CreativePlanSchema, type CreativePlan } from '../src/server/tools/creativeTools.js';
 import type { RenderInput } from '../src/server/tools/renderPreview.js';
+
+const execFileAsync = promisify(execFile);
 
 describe('demo reset and fallback modes', () => {
   it('reset advances sessionEpoch and rejects a late pre-reset result', async () => {
@@ -83,6 +87,7 @@ describe('demo reset and fallback modes', () => {
     orchestrator.setMode('REPLAY');
 
     await orchestrator.createProject(goldenProject.brief);
+    await orchestrator.confirmScript();
     await orchestrator.settle();
 
     expect(liveGenerate).not.toHaveBeenCalled();
@@ -101,12 +106,31 @@ describe('demo reset and fallback modes', () => {
     orchestrator.setMode('REPLAY');
 
     await orchestrator.createProject(goldenProject.brief);
+    await orchestrator.confirmScript();
     await orchestrator.settle();
 
     expect(livePlan).not.toHaveBeenCalled();
     expect(replayPlan).toHaveBeenCalledOnce();
     expect(orchestrator.snapshot().state?.version).toBe(1);
   });
+
+  it('replay completes the confirmed workflow with exactly one mixed audio stream', async () => {
+    const orchestrator = new DemoOrchestrator({
+      planner: { plan: async () => { throw new Error('live planner must not run'); } },
+      replayPlanner: { plan: async (state) => CreativePlanSchema.parse(state.version === 1 ? goldenProject.initialPlan : goldenProject.turn2Plan) },
+      videoProvider: { generate: async () => { throw new Error('live video must not run'); } },
+      replayCatalog: new ReplayCatalog(goldenProject.replayVideos),
+    });
+    orchestrator.setMode('REPLAY');
+    await orchestrator.createProject(goldenProject.brief);
+    await orchestrator.confirmScript();
+    await orchestrator.settle();
+    const preview = orchestrator.snapshot().state?.preview;
+    expect(preview).toBeTruthy();
+    const { stdout } = await execFileAsync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type', '-of', 'json', preview!.uri]);
+    const streams = (JSON.parse(stdout) as { streams: Array<{ codec_type: string }> }).streams;
+    expect(streams.filter((stream) => stream.codec_type === 'audio')).toHaveLength(1);
+  }, 40_000);
 
   it('exposes project, intent, mode, and reset as Runtime HTTP boundaries', async () => {
     const orchestrator = makeOrchestrator({ replayCatalog: new ReplayCatalog(goldenProject.replayVideos) });

@@ -1,0 +1,52 @@
+{
+  "brief": {
+    "product": "低糖气泡咖啡",
+    "audience": "大学生",
+    "platform": "douyin",
+    "duration": 15
+  },
+  "initialPlan": {
+    "constraints": { "platform": "douyin", "sellingPoint": "refreshing", "style": "youth_ad", "duration": 15 },
+    "strategy": { "hook": "一口气泡，打开校园新鲜感", "rationale": "用轻快校园节奏呈现新品体验" },
+    "script": { "voiceover": "课间来点新鲜气泡，今天也轻松一点。", "durationSec": 15, "language": "zh-CN", "estimatedSeconds": 15, "compliance": { "passed": true, "notes": [] }, "audioPlan": { "bgm": { "style": "轻快校园", "intensity": "低" }, "soundEffects": [{ "atSec": 3, "description": "开罐气泡声" }], "ducking": { "voiceoverDb": -3, "bgmDb": -16 } }, "shots": [{ "order": 1, "id": "shot_1", "durationSec": 3, "visualDescription": "宿舍晨间拿起咖啡", "sourceDecision": { "kind": "generated_video", "reason": "需要动态人物表演", "candidates": [] }, "aigcPrompt": "student dorm morning, sparkling coffee", "voiceover": "课间来点新鲜气泡", "musicAndSfx": "轻快节奏" }, { "order": 2, "id": "shot_2", "durationSec": 3, "visualDescription": "校园路上朋友聊天", "sourceDecision": { "kind": "existing_asset", "reason": "真实校园素材更自然", "candidates": ["campus_walk"] }, "existingClip": { "assetId": "campus_walk" }, "voiceover": "今天也轻松一点", "musicAndSfx": "无" }, { "order": 3, "id": "shot_3", "durationSec": 3, "visualDescription": "产品罐特写", "sourceDecision": { "kind": "generated_video", "reason": "突出产品动态", "candidates": [] }, "aigcPrompt": "coffee can product closeup on campus", "voiceover": "一口新鲜气泡", "musicAndSfx": "开罐气泡声" }, { "order": 4, "id": "shot_4", "durationSec": 6, "visualDescription": "草坪轻松收尾", "sourceDecision": { "kind": "existing_asset", "reason": "真实生活感更可信", "candidates": ["campus_walk"] }, "existingClip": { "assetId": "campus_walk" }, "voiceover": "轻松一点就现在", "musicAndSfx": "无" }] },
+    "scenes": [
+      { "id": "scene_1", "durationSec": 3, "visualDescription": "宿舍晨间拿起咖啡", "source": "generated_video", "generationPrompt": "student dorm morning, sparkling coffee", "needsImageReference": false },
+      { "id": "scene_2", "durationSec": 3, "visualDescription": "校园路上朋友聊天", "source": "existing_asset", "assetQuery": "campus friends walk", "needsImageReference": false },
+      { "id": "scene_3", "durationSec": 3, "visualDescription": "产品罐特写", "source": "generated_video", "generationPrompt": "coffee can product closeup on campus", "assetQuery": "low sugar coffee can product", "needsImageReference": false },
+      { "id": "scene_4", "durationSec": 6, "visualDescription": "草坪轻松收尾", "source": "existing_asset", "assetQuery": "campus young lifestyle walk", "needsImageReference": false }
+    ]
+  },
+  "turn2Plan": {
+    "constraints": { "platform": "douyin", "sellingPoint": "low_sugar", "style": "campus_vlog", "duration": 15 },
+    "strategy": { "hook": "真实课间，也能轻松低糖", "rationale": "用大学生日常记录弱化商业广告感" },
+    "script": { "voiceover": "低糖，也可以很好喝。课间就轻松一点。", "durationSec": 15, "language": "zh-CN", "estimatedSeconds": 15, "compliance": { "passed": true, "notes": [] }, "audioPlan": { "bgm": { "style": "轻快生活感", "intensity": "低" }, "soundEffects": [{ "atSec": 3, "description": "轻微开罐声" }], "ducking": { "voiceoverDb": -3, "bgmDb": -16 } }, "shots": [{ "order": 1, "id": "shot_1", "durationSec": 3, "visualDescription": "宿舍晨间生活记录", "sourceDecision": { "kind": "generated_video", "reason": "需要动态人物表演", "candidates": [] }, "aigcPrompt": "authentic college dorm vlog morning", "voiceover": "低糖，也可以很好喝", "musicAndSfx": "轻快节奏" }, { "order": 2, "id": "shot_2", "durationSec": 3, "visualDescription": "校园朋友自然聊天", "sourceDecision": { "kind": "existing_asset", "reason": "真实素材更自然", "candidates": ["campus_walk"] }, "existingClip": { "assetId": "campus_walk" }, "voiceover": "课间就轻松一点", "musicAndSfx": "无" }, { "order": 3, "id": "shot_3", "durationSec": 3, "visualDescription": "真实产品罐低糖信息", "sourceDecision": { "kind": "generated_video", "reason": "突出产品动态", "candidates": [] }, "aigcPrompt": "authentic low sugar coffee can closeup", "voiceover": "低糖负担，清爽不甜", "musicAndSfx": "开罐声" }, { "order": 4, "id": "shot_4", "durationSec": 6, "visualDescription": "草坪日常感收尾", "sourceDecision": { "kind": "existing_asset", "reason": "真实生活感更可信", "candidates": ["campus_walk"] }, "existingClip": { "assetId": "campus_walk" }, "voiceover": "现在就轻松一点", "musicAndSfx": "无" }] },
+    "scenes": [
+      { "id": "scene_1", "durationSec": 3, "visualDescription": "宿舍晨间生活记录", "source": "generated_video", "generationPrompt": "authentic college dorm vlog morning", "needsImageReference": false },
+      { "id": "scene_2", "durationSec": 3, "visualDescription": "校园朋友自然聊天", "source": "existing_asset", "assetQuery": "campus friends walk", "needsImageReference": false },
+      { "id": "scene_3", "durationSec": 3, "visualDescription": "真实产品罐低糖信息", "source": "generated_video", "generationPrompt": "authentic low sugar coffee can closeup", "assetQuery": "low sugar coffee can product", "needsImageReference": false },
+      { "id": "scene_4", "durationSec": 6, "visualDescription": "草坪日常感收尾", "source": "existing_asset", "assetQuery": "campus young lifestyle walk", "needsImageReference": false }
+    ]
+  },
+  "turn2Patch": {
+    "patchId": "patch_02",
+    "baseVersion": 1,
+    "changes": {
+      "creative.sellingPoint": "low_sugar",
+      "creative.style": "campus_vlog",
+      "creative.tone": "authentic"
+    },
+    "userSummary": "不要强调提神，重点突出低糖，而且像大学生真实生活记录"
+  },
+  "turn3Patch": {
+    "patchId": "patch_03",
+    "baseVersion": 2,
+    "changes": { "scenes.scene_3.source": "existing_asset" },
+    "userSummary": "第三个镜头别生成了，换成真实产品素材"
+  },
+  "replayVideos": {
+    "scene_1": "demo/assets/campus_product_coffee.mp4",
+    "scene_2": "demo/assets/campus_walk.mp4",
+    "scene_3": "demo/assets/coffee_closeup.mp4",
+    "scene_4": "demo/assets/campus_walk.mp4"
+  }
+}
