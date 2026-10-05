@@ -108,7 +108,8 @@ describe('three-turn Golden Path', () => {
     await orchestrator.settle();
     const final = orchestrator.snapshot();
     expect(final.state?.phase).toBe('COMPLETED');
-    expect(final.state?.preview).toMatchObject({ id: 'preview_v1', stateVersion: 1 });
+    expect(final.state?.preview).toMatchObject({ stateVersion: 1 });
+    expect(final.state?.preview?.id).toContain('preview_v1');
   });
 
   it('cancels affected production work when the user changes a scene source', async () => {

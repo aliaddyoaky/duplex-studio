@@ -1,7 +1,8 @@
 import type { Artifact, IntentPatch, ProjectState, TaskRecord } from '../../shared/schemas.js';
-import { ArtifactSchema, ProjectStateSchema } from '../../shared/schemas.js';
+import { ArtifactSchema, ProjectStateSchema, type AudioArtifact } from '../../shared/schemas.js';
 import type { RuntimeMetrics } from '../../shared/events.js';
-import type { CreativePlan } from '../tools/creativeTools.js';
+import { buildPlannerPrompt, type CreativePlan } from '../tools/creativeTools.js';
+import { AssetLibrary } from '../assets/assetLibrary.js';
 import type { AudioProvider } from '../providers/audioProvider.js';
 import { LocalAudioProvider } from '../providers/audioProvider.js';
 import type { VideoArtifact, VideoProvider } from '../providers/videoProvider.js';
@@ -27,6 +28,7 @@ export interface DemoPlanner {
   plan(
     state: ProjectState,
     context: { reason: 'initial' | 'patch'; changedFields?: string[] },
+    signal?: AbortSignal,
   ): Promise<CreativePlan>;
 }
 
@@ -64,6 +66,7 @@ export interface DemoOrchestratorOptions {
   fallbackVideoByScene?: Record<string, VideoArtifact>;
   replayCatalog?: ReplayCatalog;
   historyStore?: HistoryStore;
+  assetLibrary?: AssetLibrary;
 }
 
 export interface DemoSnapshot {
@@ -82,6 +85,8 @@ export class DemoOrchestrator {
   readonly eventLog: EventLog;
   readonly historyStore: HistoryStore;
   private readonly registry: ArtifactRegistry;
+  private readonly assetLibrary: AssetLibrary;
+  private planningController?: AbortController;
   private readonly planner: DemoPlanner;
   private readonly replayPlanner?: DemoPlanner;
   private readonly videoProvider: VideoProvider;
@@ -95,9 +100,9 @@ export class DemoOrchestrator {
   private readonly activeRuns = new Set<Promise<void>>();
   private readonly sceneArtifacts = new Map<string, VideoArtifact>();
   private readonly audioArtifacts = {
-    voiceover: undefined as import('../../shared/schemas.js').AudioArtifact | undefined,
-    bgm: undefined as import('../../shared/schemas.js').AudioArtifact | undefined,
-    sfx: [] as import('../../shared/schemas.js').AudioArtifact[],
+    voiceover: undefined as AudioArtifact | undefined,
+    bgm: undefined as AudioArtifact | undefined,
+    sfx: [] as AudioArtifact[],
   };
 
   private state: ProjectState | null = null;
@@ -113,6 +118,7 @@ export class DemoOrchestrator {
     this.previewRenderer = options.renderPreview ?? renderPreviewReal;
     this.eventLog = options.eventLog ?? new EventLog();
     this.registry = options.artifactRegistry ?? new ArtifactRegistry();
+    this.assetLibrary = options.assetLibrary ?? new AssetLibrary();
     this.delayResult = options.delayResult;
     this.allowHybridFallback = options.allowHybridFallback ?? false;
     this.fallbackVideoByScene = options.fallbackVideoByScene ?? {};
@@ -128,9 +134,21 @@ export class DemoOrchestrator {
   }
 
   async createProject(brief: ProjectState['brief']): Promise<ProjectState> {
-    if (this.state) throw new Error('A demo project already exists; reset before creating another');
+    if (this.state || this.planningController) throw new Error('A demo project already exists; reset before creating another');
+    const epoch = this.sessionEpoch;
+    const controller = new AbortController();
+    this.planningController = controller;
     const initial = createInitialState(brief);
-    const plan = await this.currentPlanner().plan(initial, { reason: 'initial' });
+    initial.projectId = `project_${crypto.randomUUID()}`;
+    initial.assets = await this.assetLibrary.list();
+    const startedAt = Date.now();
+    let plan: CreativePlan;
+    try {
+      plan = await this.currentPlanner().plan(initial, { reason: 'initial' }, controller.signal);
+      if (controller.signal.aborted || this.sessionEpoch !== epoch) throw new Error('Planning superseded by reset');
+    } finally {
+      if (this.planningController === controller) this.planningController = undefined;
+    }
     this.state = transitionProjectPhase(applyCreativePlan(initial, plan), 'SCRIPT_REVIEW');
     this.graph = { version: 1, tasks: buildPlanningTasks(this.state), decisions: [] };
     this.eventLog.append(
@@ -140,6 +158,8 @@ export class DemoOrchestrator {
     );
     this.launchCurrentGraph();
     await this.settle();
+    const scriptTask = this.graph?.tasks.find((task) => task.type === 'script');
+    if (scriptTask) scriptTask.startedAt = startedAt;
     await this.recordHistory();
     return structuredClone(this.state);
   }
@@ -169,11 +189,14 @@ export class DemoOrchestrator {
   async applyPatch(patch: IntentPatch): Promise<PatchCommitResult> {
     if (!this.state || !this.graph) throw new Error('Create a project before applying intent patches');
     const previousVersion = this.state.version;
+    const patchEpoch = this.sessionEpoch;
     const currentTasks = this.graph.tasks.filter(
       (task) => task.stateVersion === previousVersion && task.status !== 'cancelled',
     );
     const committed = commitIntentPatch(this.state, patch);
     this.state = committed.current;
+    this.state.preview = undefined;
+    this.state.script = syncScriptWithScenes(this.state);
     if (this.state.phase === 'COMPLETED' || this.state.phase === 'FAILED') {
       this.state = transitionProjectPhase(this.state, 'SCRIPT_REVIEW');
     }
@@ -198,6 +221,7 @@ export class DemoOrchestrator {
           reason: 'patch',
           changedFields: committed.changedFields,
         });
+        if (!this.state || this.state.version !== committed.current.version || this.sessionEpoch !== patchEpoch) throw new Error('Planning superseded by a newer edit');
         this.state = applyCreativePlan(this.state, plan);
       }
       this.graph = { version: this.state.version, tasks: buildPlanningTasks(this.state), decisions: [] };
@@ -242,6 +266,7 @@ export class DemoOrchestrator {
         reason: 'patch',
         changedFields: committed.changedFields,
       });
+      if (!this.state || this.state.version !== committed.current.version || this.sessionEpoch !== patchEpoch) throw new Error('Planning superseded by a newer edit');
       this.state = applyCreativePlan(this.state, plan);
     }
 
@@ -255,6 +280,8 @@ export class DemoOrchestrator {
   }
 
   reset(): { sessionEpoch: number; abortedTasks: number } {
+    this.planningController?.abort();
+    this.planningController = undefined;
     const abortedTasks = this.scheduler.cancelAll();
     this.sessionEpoch += 1;
     this.state = null;
@@ -425,9 +452,9 @@ export class DemoOrchestrator {
           outputs: artifacts.map((artifact) => ({ name: artifact.id, kind: artifact.type, ref: artifact.uri, summary: `${artifact.type} artifact` })),
         };
         const artifact = artifacts[0]!;
-        if (task.type === 'audio_voiceover') this.audioArtifacts.voiceover = artifact as import('../../shared/schemas.js').AudioArtifact;
-        if (task.type === 'audio_bgm') this.audioArtifacts.bgm = artifact as import('../../shared/schemas.js').AudioArtifact;
-        if (task.type === 'audio_sfx') this.audioArtifacts.sfx = artifacts as import('../../shared/schemas.js').AudioArtifact[];
+        if (task.type === 'audio_voiceover') this.audioArtifacts.voiceover = artifact as AudioArtifact;
+        if (task.type === 'audio_bgm') this.audioArtifacts.bgm = artifact as AudioArtifact;
+        if (task.type === 'audio_sfx') this.audioArtifacts.sfx = artifacts as AudioArtifact[];
         if (task.type.startsWith('generated_scene:')) {
           const sceneId = task.type.slice('generated_scene:'.length);
           this.sceneArtifacts.set(sceneId, artifact as VideoArtifact);
@@ -451,6 +478,11 @@ export class DemoOrchestrator {
           await this.recordHistory();
         }
       }
+      task.trace = {
+        ...task.trace,
+        durationMs: task.finishedAt - (task.startedAt ?? task.finishedAt),
+        outputs: task.trace?.outputs.length ? task.trace.outputs : [{ name: task.type, kind: 'json', summary: JSON.stringify(result.value ?? { completed: true }, null, 2) }],
+      };
       this.eventLog.append(
         'TASK_COMPLETED',
           { taskId: task.id, taskType: task.type, artifactId: artifacts[0]?.id },
@@ -468,7 +500,7 @@ export class DemoOrchestrator {
           retryable: true,
         },
       };
-      if (this.state && this.state.phase !== 'FAILED' && task.stateVersion === this.state.version) {
+      if (this.state && this.state.phase !== 'FAILED' && task.stateVersion === this.state.version && !this.scheduler.runningTaskIds().includes(task.id) && !(error instanceof Error && error.name === 'AbortError')) {
         this.state = transitionProjectPhase(this.state, 'FAILED');
         await this.recordHistory();
       }
@@ -491,6 +523,17 @@ export class DemoOrchestrator {
     };
     if (!this.state) return base;
 
+    if (['product_analysis', 'script', 'asset_search', 'storyboard', 'prompt_lint'].includes(task.type)) {
+      if (task.type === 'script') {
+        task.trace?.inputs.push({ name: '规划提示词', kind: 'prompt', summary: buildPlannerPrompt(this.state) });
+        return { ...base, value: this.state.script };
+      }
+      if (task.type === 'product_analysis') return { ...base, value: { brief: this.state.brief, creative: this.state.creative } };
+      if (task.type === 'storyboard') return { ...base, value: this.state.script?.shots };
+      if (task.type === 'prompt_lint') return { ...base, value: { compliance: this.state.script?.compliance, prompts: this.state.scenes.filter((scene) => scene.source === 'generated_video').map((scene) => ({ sceneId: scene.id, prompt: scene.generationPrompt })) } };
+      return { ...base, value: this.state.script?.shots.map((shot) => ({ id: shot.id, sourceDecision: shot.sourceDecision, existingClip: shot.existingClip })) };
+    }
+
     if (task.type.startsWith('generated_scene:')) {
       const sceneId = task.type.slice('generated_scene:'.length);
       const scene = this.state.scenes.find((candidate) => candidate.id === sceneId);
@@ -500,7 +543,7 @@ export class DemoOrchestrator {
         { taskId: task.id, sceneId, mode: this.mode },
         this.context(task.stateVersion),
       );
-      const artifact = await this.generateSceneVideo(sceneId, scene.generationPrompt ?? scene.visualDescription, task, signal);
+      const artifact = await this.generateSceneVideo(sceneId, `${scene.generationPrompt ?? scene.visualDescription}\nSilent video only. No music, voiceover or sound effects.`, task, signal);
       this.eventLog.append(
         'VIDEO_JOB_COMPLETED',
         { taskId: task.id, sceneId, source: artifact.source },
@@ -556,11 +599,14 @@ export class DemoOrchestrator {
     }
 
     if (task.type === 'render') {
-      const clips = this.state.scenes.map((scene) => {
+      const clips = await Promise.all(this.state.scenes.map(async (scene) => {
         let artifact: VideoArtifact | undefined;
         if (scene.source === 'generated_video') artifact = this.sceneArtifacts.get(scene.id);
         else {
-          const match = searchAssets(scene.assetQuery ?? scene.visualDescription, 1)[0];
+          const shot = this.state!.script?.shots.find((candidate) => candidate.id === scene.id);
+          const selectedId = scene.assetId ?? shot?.existingClip?.assetId;
+          const selected = this.state!.assets.find((asset) => asset.id === selectedId);
+          const match = selected ?? (await this.assetLibrary.search(scene.assetQuery ?? scene.visualDescription, 10)).find((asset) => asset.type === 'video' && (!selectedId || asset.id === selectedId)) ?? searchAssets(scene.assetQuery ?? scene.visualDescription, 10).find((asset) => asset.type === 'video');
           if (match) {
             artifact = {
               id: `asset_${match.id}`,
@@ -575,10 +621,11 @@ export class DemoOrchestrator {
         if (!artifact) throw new Error(`No renderable artifact for ${scene.id}`);
         return {
           artifact,
-              durationSec: scene.durationSec,
+          durationSec: scene.durationSec,
+          startSec: scene.startSec,
               caption: scene.narration ?? scene.visualDescription,
             };
-      });
+      }));
       return {
         ...base,
         value: await this.previewRenderer(
@@ -593,7 +640,7 @@ export class DemoOrchestrator {
                 })).filter((track) => Boolean(track.artifact)),
                 ducking: this.state.script?.audioPlan.ducking,
               },
-              outputId: `preview_v${task.stateVersion}`,
+            outputId: this.state.projectId === 'project_local' ? `preview_v${task.stateVersion}` : `${this.state.projectId}_preview_v${task.stateVersion}`,
             stateVersion: task.stateVersion,
             sessionEpoch,
           },
@@ -666,7 +713,7 @@ export class DemoOrchestrator {
 }
 
 function applyCreativePlan(state: ProjectState, plan: CreativePlan): ProjectState {
-  return ProjectStateSchema.parse({
+  const next = ProjectStateSchema.parse({
     ...state,
     creative: {
       ...state.creative,
@@ -676,6 +723,31 @@ function applyCreativePlan(state: ProjectState, plan: CreativePlan): ProjectStat
     script: plan.script,
     scenes: plan.scenes,
   });
+  next.script = syncScriptWithScenes(next);
+  return next;
+}
+
+function syncScriptWithScenes(state: ProjectState): ProjectState['script'] {
+  if (!state.script) return undefined;
+  const script = structuredClone(state.script);
+  script.shots = state.scenes.map((scene, index) => {
+    const planned = script.shots[index];
+    const candidates = state.assets.filter((asset) => asset.type === 'video' && `${asset.filename ?? ''} ${asset.tags.join(' ')}`.toLowerCase().includes((scene.assetQuery ?? scene.visualDescription).toLowerCase())).map((asset) => asset.id);
+    const assetId = scene.assetId ?? candidates[0] ?? planned?.existingClip?.assetId;
+    return {
+      order: index + 1,
+      id: scene.id,
+      durationSec: scene.durationSec,
+      visualDescription: scene.visualDescription,
+      sourceDecision: { kind: scene.source, reason: planned?.sourceDecision.reason ?? (scene.source === 'existing_asset' ? '优先匹配已有素材' : '需要生成新的画面'), candidates: [...new Set([...(assetId ? [assetId] : []), ...(planned?.sourceDecision.candidates ?? []), ...candidates])] },
+      existingClip: scene.source === 'existing_asset' && assetId ? { assetId, startSec: scene.startSec ?? planned?.existingClip?.startSec, endSec: planned?.existingClip?.endSec } : undefined,
+      aigcPrompt: scene.source === 'generated_video' ? scene.generationPrompt ?? planned?.aigcPrompt ?? scene.visualDescription : undefined,
+      voiceover: planned?.voiceover ?? scene.narration ?? '',
+      onScreenText: planned?.onScreenText,
+      musicAndSfx: planned?.musicAndSfx ?? '统一音频方案',
+    };
+  });
+  return script;
 }
 
 function buildPlanningTasks(state: ProjectState): TaskRecord[] {

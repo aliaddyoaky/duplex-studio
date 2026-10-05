@@ -3,7 +3,6 @@ import { createApp } from './app.js';
 import { CreativeBrain } from './agents/creativeBrain.js';
 import { loadConfig } from './config.js';
 import {
-  createCancellationReleasedDelay,
   DemoOrchestrator,
   type DemoPlanner,
 } from './demo/orchestrator.js';
@@ -12,6 +11,7 @@ import { GeminiLiveTokenProvider } from './providers/liveTokenProvider.js';
 import { DeepSeekReasoningProvider } from './providers/reasoningProvider.js';
 import { MiniMaxVideoProvider, type VideoArtifact, type VideoProvider } from './providers/videoProvider.js';
 import { CreativePlanSchema } from './tools/creativeTools.js';
+import { AssetLibrary } from './assets/assetLibrary.js';
 
 try {
   process.loadEnvFile?.('.env.local');
@@ -68,14 +68,15 @@ if (config.server.minimaxApiKey) {
   };
 }
 
+const assetLibrary = new AssetLibrary();
 const orchestrator = new DemoOrchestrator({
+  assetLibrary,
   planner,
   replayPlanner: fixturePlanner,
   videoProvider,
   replayCatalog,
   fallbackVideoByScene,
   allowHybridFallback: true,
-  delayResult: createCancellationReleasedDelay({ taskType: 'generated_scene:scene_3', stateVersion: 1 }),
 });
 const allLiveProvidersReady = Boolean(
   config.server.geminiApiKey && config.server.deepseekApiKey && config.server.minimaxApiKey,
@@ -89,6 +90,7 @@ orchestrator.setMode(
 );
 
 const app = createApp({
+  assetLibrary,
   liveTokenProvider: config.server.geminiApiKey
     ? new GeminiLiveTokenProvider({ apiKey: config.server.geminiApiKey })
     : undefined,

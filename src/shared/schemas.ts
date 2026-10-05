@@ -20,6 +20,8 @@ export const SceneSchema = z.object({
   source: SceneSourceSchema,
   generationPrompt: z.string().optional(),
   assetQuery: z.string().optional(),
+  assetId: z.string().optional(),
+  startSec: z.number().nonnegative().optional(),
 });
 
 export const AssetSchema = z.object({
@@ -80,6 +82,7 @@ export const TaskRecordSchema = z.object({
 });
 
 export const ScriptAudioPlanSchema = z.object({
+  voiceoverAssetId: z.string().optional(),
   bgm: z.object({
     style: z.string().min(1),
     intensity: z.string().min(1),

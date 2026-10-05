@@ -13,6 +13,7 @@ export interface RenderClip {
   artifact: VideoArtifact;
   durationSec: number;
   caption?: string;
+  startSec?: number;
 }
 
 export interface RenderAudioMix {
@@ -63,7 +64,10 @@ export async function renderPreview(
       ? await hasFfmpegFilter('drawtext')
       : false;
     const args = ['-hide_banner', '-loglevel', 'error'];
-    for (const clip of input.clips) args.push('-i', resolve(clip.artifact.uri));
+    for (const clip of input.clips) {
+      if (clip.startSec) args.push('-ss', String(clip.startSec));
+      args.push('-i', resolveMediaPath(clip.artifact.uri));
+    }
     const audioTracks: Array<{ artifact: AudioArtifact; atSec: number; volumeDb: number }> = [];
     if (input.audioMix?.voiceover) {
       audioTracks.push({
@@ -82,7 +86,7 @@ export async function renderPreview(
     for (const track of input.audioMix?.sfx ?? []) {
       audioTracks.push({ artifact: track.artifact, atSec: track.atSec ?? 0, volumeDb: track.volumeDb ?? -8 });
     }
-    for (const track of audioTracks) args.push('-i', resolve(track.artifact.uri));
+    for (const track of audioTracks) args.push('-i', resolveMediaPath(track.artifact.uri));
 
     const filters: string[] = [];
     const outputLabels: string[] = [];
@@ -175,4 +179,15 @@ async function hasFfmpegFilter(filterName: string): Promise<boolean> {
 
 function escapeFilterValue(value: string): string {
   return value.replaceAll('\\', '\\\\').replaceAll(':', '\\:').replaceAll("'", "\\'");
+}
+
+export function resolveMediaPath(uri: string): string {
+  const prefixes: Record<string, string> = { '/media/uploads/': 'data/uploads', '/media/assets/': 'demo/assets', '/media/artifacts/': 'data/artifacts' };
+  for (const [prefix, directory] of Object.entries(prefixes)) {
+    if (!uri.startsWith(prefix)) continue;
+    const name = decodeURIComponent(uri.slice(prefix.length));
+    if (name.includes('/') || name.includes('\\') || name === '..') throw new Error('Invalid media path');
+    return resolve(directory, name);
+  }
+  return resolve(uri);
 }
