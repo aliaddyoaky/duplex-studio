@@ -21,6 +21,7 @@ import { searchAssets } from '../tools/assetSearch.js';
 import { renderPreview as renderPreviewReal, type RenderInput } from '../tools/renderPreview.js';
 import type { DemoMode } from './fallback.js';
 import { ReplayCatalog } from './replay.js';
+import { HistoryStore, type HistorySnapshot } from '../history/historyStore.js';
 
 export interface DemoPlanner {
   plan(
@@ -62,6 +63,7 @@ export interface DemoOrchestratorOptions {
   allowHybridFallback?: boolean;
   fallbackVideoByScene?: Record<string, VideoArtifact>;
   replayCatalog?: ReplayCatalog;
+  historyStore?: HistoryStore;
 }
 
 export interface DemoSnapshot {
@@ -78,6 +80,7 @@ export interface DemoSnapshot {
 
 export class DemoOrchestrator {
   readonly eventLog: EventLog;
+  readonly historyStore: HistoryStore;
   private readonly registry: ArtifactRegistry;
   private readonly planner: DemoPlanner;
   private readonly replayPlanner?: DemoPlanner;
@@ -114,6 +117,7 @@ export class DemoOrchestrator {
     this.allowHybridFallback = options.allowHybridFallback ?? false;
     this.fallbackVideoByScene = options.fallbackVideoByScene ?? {};
     this.replayCatalog = options.replayCatalog;
+    this.historyStore = options.historyStore ?? new HistoryStore();
     this.scheduler = new Scheduler(
       (context) => {
         const result = this.executeTask(context);
@@ -136,6 +140,7 @@ export class DemoOrchestrator {
     );
     this.launchCurrentGraph();
     await this.settle();
+    await this.recordHistory();
     return structuredClone(this.state);
   }
 
@@ -156,6 +161,7 @@ export class DemoOrchestrator {
       { taskCount: this.graph.tasks.length, reason: 'script_confirmed' },
       this.context(this.state.version),
     );
+    await this.recordHistory();
     this.launchCurrentGraph();
     return structuredClone(this.state);
   }
@@ -202,6 +208,7 @@ export class DemoOrchestrator {
       );
       this.launchCurrentGraph();
       await this.settle();
+      await this.recordHistory();
       return { ...committed, current: structuredClone(this.state) };
     }
 
@@ -280,6 +287,35 @@ export class DemoOrchestrator {
     };
   }
 
+  taskDetail(taskId: string): { task: TaskRecord; events: ReturnType<EventLog['snapshot']> } | null {
+    const task = this.graph?.tasks.find((candidate) => candidate.id === taskId);
+    if (!task) return null;
+    return {
+      task: structuredClone(task),
+      events: this.eventLog.snapshot().filter((event) => event.payload.taskId === taskId),
+    };
+  }
+
+  async retryTask(taskId: string): Promise<TaskRecord> {
+    if (!this.graph) throw new Error('Create a project before retrying a task');
+    const task = this.graph.tasks.find((candidate) => candidate.id === taskId);
+    if (!task) throw new Error(`Unknown task ${taskId}`);
+    if (task.status !== 'failed' || task.trace?.error?.retryable !== true) {
+      throw new Error(`Task ${taskId} is not retryable`);
+    }
+    task.status = 'pending';
+    task.startedAt = undefined;
+    task.finishedAt = undefined;
+    task.artifactIds = undefined;
+    task.trace = {
+      ...task.trace,
+      attempt: (task.trace.attempt ?? 1) + 1,
+      error: undefined,
+    };
+    this.launchCurrentGraph();
+    return structuredClone(task);
+  }
+
   async settle(): Promise<void> {
     while (this.activeRuns.size > 0) {
       await Promise.allSettled([...this.activeRuns]);
@@ -309,6 +345,13 @@ export class DemoOrchestrator {
     }
     const coordinator = Promise.allSettled(renderDependencies).then(async () => {
       if (!this.state || this.state.version !== version || !this.graph) return;
+      const failedDependency = this.graph.tasks.some(
+        (task) =>
+          task.stateVersion === version &&
+          (task.type.startsWith('generated_scene:') || task.type.startsWith('audio_')) &&
+          ['failed', 'cancelled', 'stale'].includes(task.status),
+      );
+      if (failedDependency) return;
       const render = this.graph.tasks.find(
         (task) => task.stateVersion === version && task.type === 'render' && task.status === 'pending',
       );
@@ -330,6 +373,14 @@ export class DemoOrchestrator {
     }
     task.status = 'running';
     task.startedAt = Date.now();
+    task.trace = {
+      ...task.trace,
+      inputs: [{ name: 'project', kind: 'state', ref: `${task.stateVersion}`, summary: `project version ${task.stateVersion}` }],
+      outputs: [],
+      downstream: this.graph?.tasks.filter((candidate) => candidate.dependencies.includes(task.id)).map((candidate) => candidate.id) ?? [],
+      attempt: task.trace?.attempt ?? 1,
+      error: undefined,
+    };
     this.eventLog.append(
       'TASK_STARTED',
       { taskId: task.id, taskType: task.type },
@@ -346,6 +397,7 @@ export class DemoOrchestrator {
       if (disposition !== 'ACCEPT') {
         task.status = 'stale';
         task.finishedAt = Date.now();
+        task.trace = { ...task.trace, durationMs: task.finishedAt - (task.startedAt ?? task.finishedAt) };
         const graphTask = this.graph?.tasks.find(
           (candidate) => candidate.id === task.id && candidate.stateVersion === task.stateVersion,
         );
@@ -367,6 +419,11 @@ export class DemoOrchestrator {
       if (artifacts.length > 0) {
         for (const artifact of artifacts) this.registry.register(artifact, disposition);
         task.artifactIds = artifacts.map((artifact) => artifact.id);
+        task.trace = {
+          ...task.trace,
+          durationMs: (task.finishedAt ?? Date.now()) - (task.startedAt ?? task.finishedAt ?? Date.now()),
+          outputs: artifacts.map((artifact) => ({ name: artifact.id, kind: artifact.type, ref: artifact.uri, summary: `${artifact.type} artifact` })),
+        };
         const artifact = artifacts[0]!;
         if (task.type === 'audio_voiceover') this.audioArtifacts.voiceover = artifact as import('../../shared/schemas.js').AudioArtifact;
         if (task.type === 'audio_bgm') this.audioArtifacts.bgm = artifact as import('../../shared/schemas.js').AudioArtifact;
@@ -391,6 +448,7 @@ export class DemoOrchestrator {
             { artifactId: artifact.id },
             this.context(this.state.version),
           );
+          await this.recordHistory();
         }
       }
       this.eventLog.append(
@@ -401,6 +459,19 @@ export class DemoOrchestrator {
     } catch (error) {
       task.status = 'failed';
       task.finishedAt = Date.now();
+      task.trace = {
+        ...task.trace,
+        durationMs: task.finishedAt - (task.startedAt ?? task.finishedAt),
+        error: {
+          code: typeof (error as { code?: unknown })?.code === 'string' ? String((error as { code: string }).code) : 'TASK_FAILED',
+          message: errorMessage(error),
+          retryable: true,
+        },
+      };
+      if (this.state && this.state.phase !== 'FAILED' && task.stateVersion === this.state.version) {
+        this.state = transitionProjectPhase(this.state, 'FAILED');
+        await this.recordHistory();
+      }
       if (task.type.startsWith('generated_scene:')) {
         this.eventLog.append(
           'VIDEO_JOB_COMPLETED',
@@ -575,6 +646,22 @@ export class DemoOrchestrator {
 
   private currentPlanner(): DemoPlanner {
     return this.mode === 'REPLAY' && this.replayPlanner ? this.replayPlanner : this.planner;
+  }
+
+  private async recordHistory(): Promise<void> {
+    if (!this.state) return;
+    const snapshot = this.snapshot();
+    const history: HistorySnapshot = {
+      projectId: this.state.projectId,
+      version: this.state.version,
+      phase: this.state.phase,
+      savedAt: new Date().toISOString(),
+      state: snapshot.state,
+      tasks: snapshot.tasks,
+      artifacts: snapshot.artifacts,
+      events: snapshot.events,
+    };
+    await this.historyStore.saveVersion(history);
   }
 }
 

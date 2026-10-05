@@ -10,6 +10,7 @@ import type { LiveTokenProvider } from './providers/liveTokenProvider.js';
 import type { DemoOrchestrator } from './demo/orchestrator.js';
 import { AssetLibrary } from './assets/assetLibrary.js';
 import { createAssetsRouter } from './routes/assets.js';
+import { createHistoryRouter } from './routes/history.js';
 
 export interface AppDeps {
   eventLog?: EventLog;
@@ -39,6 +40,7 @@ export function createApp(_deps: AppDeps = {}): Express {
   if (_deps.demoOrchestrator) {
     app.use('/api', createIntentRouter(_deps.demoOrchestrator));
     app.use('/api', createProjectRouter(_deps.demoOrchestrator));
+    app.use('/api', createHistoryRouter(_deps.demoOrchestrator));
   }
   return app;
 }
