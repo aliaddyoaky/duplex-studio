@@ -24,9 +24,14 @@ export const SceneSchema = z.object({
 
 export const AssetSchema = z.object({
   id: z.string().min(1),
-  type: z.enum(['image', 'video']),
+  type: z.enum(['image', 'video', 'audio']),
   uri: z.string().min(1),
   tags: z.array(z.string()).default([]),
+  filename: z.string().optional(),
+  mimeType: z.string().optional(),
+  sizeBytes: z.number().int().nonnegative().optional(),
+  checksum: z.string().optional(),
+  createdAt: z.string().optional(),
 });
 
 export const ArtifactSchema = z.object({
