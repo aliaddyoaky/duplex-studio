@@ -59,7 +59,7 @@ export function App() {
 
   const confirm = async () => {
     setBusy(true);
-    try { await confirmScript(); await refresh(); } finally { setBusy(false); }
+    try { await confirmScript(); await refresh(); } catch (error) { dispatch({ type: 'ERROR', message: error instanceof Error ? error.message : String(error) }); } finally { setBusy(false); }
   };
 
   const createFromBrief = async (brief: typeof GOLDEN_BRIEF) => {

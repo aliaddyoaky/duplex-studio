@@ -26,7 +26,7 @@ export function RealtimePanel(props: {
       getStateVersion: () => versionRef.current,
       onTranscript: (text, speaker) => {
         setLines((current) => [...current.slice(-7), { speaker, text }]);
-        if (speaker === 'user' && text.includes('开始')) props.onConfirmScript?.();
+        if (speaker === 'user' && (text.includes('开始制作') || text.trim() === '开始')) props.onConfirmScript?.();
       },
       onSpeaking: (speaking) => setVoiceStatus(speaking ? 'speaking' : 'connected'),
       onInterrupted: () => setLines((current) => [...current, { speaker: 'agent', text: '↳ 已中断，播放内容已清除' }]),
