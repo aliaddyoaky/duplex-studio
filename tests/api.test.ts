@@ -157,6 +157,30 @@ describe('interview UI reducer', () => {
     expect(state.staleTaskIds).toContain('script');
   });
 
+  it('keeps node trace details in snapshots and clears selection on session reset', () => {
+    let state = createInitialDemoState();
+    state = demoReducer(state, {
+      type: 'SNAPSHOT',
+      snapshot: {
+        state: minimalProject,
+        tasks: [{
+          id: 'render', type: 'render', stateVersion: 1, dependencies: [], affectedBy: [], status: 'failed',
+          trace: {
+            inputs: [{ name: 'clips', kind: 'artifact', summary: '4 clips' }],
+            outputs: [], downstream: [], durationMs: 42, attempt: 1,
+            error: { code: 'FFMPEG', message: 'mix failed', retryable: true },
+          },
+        }],
+        artifacts: [], mode: 'LIVE', sessionEpoch: 1,
+      },
+    });
+    state = demoReducer(state, { type: 'SELECT_TASK', taskId: 'render' });
+    expect(state.snapshot?.tasks[0]?.trace?.error?.retryable).toBe(true);
+    expect(state.selectedTaskId).toBe('render');
+    state = demoReducer(state, { type: 'SNAPSHOT', snapshot: { state: null, tasks: [], artifacts: [], mode: 'LIVE', sessionEpoch: 2 } });
+    expect(state.selectedTaskId).toBeNull();
+  });
+
   it('derives latency and reuse metrics from event timestamps rather than constants', () => {
     const events: RuntimeEvent[] = [
       runtimeEvent(1, 'USER_SPEECH_END', 1_000),
