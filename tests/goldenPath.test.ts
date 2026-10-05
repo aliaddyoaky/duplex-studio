@@ -11,6 +11,7 @@ import {
 } from '../src/server/demo/orchestrator.js';
 import type { TaskRecord } from '../src/shared/schemas.js';
 import type { VideoArtifact, VideoProvider } from '../src/server/providers/videoProvider.js';
+import type { AudioProvider } from '../src/server/providers/audioProvider.js';
 import type { RenderInput } from '../src/server/tools/renderPreview.js';
 
 describe('local asset retrieval and scene routing', () => {
@@ -88,12 +89,21 @@ describe('three-turn Golden Path', () => {
 
   it('starts video only after script confirmation and completes the preview', async () => {
     let videoCalls = 0;
-    const orchestrator = makeOrchestrator({ onVideoCall: () => videoCalls += 1 });
+    const audioCalls = { voiceover: 0, bgm: 0, sfx: 0 };
+    const orchestrator = makeOrchestrator({
+      onVideoCall: () => videoCalls += 1,
+      audioProvider: {
+        generateVoiceover: async (input) => { audioCalls.voiceover += 1; return audioArtifact('voiceover', input.stateVersion, input.sessionEpoch); },
+        selectOrGenerateBgm: async (input) => { audioCalls.bgm += 1; return audioArtifact('bgm', input.stateVersion, input.sessionEpoch); },
+        prepareSfx: async (input) => { audioCalls.sfx += 1; return input.effects.map((_, index) => audioArtifact(`sfx_${index}`, input.stateVersion, input.sessionEpoch)); },
+      },
+    });
 
     await orchestrator.createProject(goldenProject.brief);
     const confirmed = await orchestrator.confirmScript();
     expect(confirmed.phase).toBe('PRODUCING');
     expect(videoCalls).toBe(2);
+    expect(audioCalls).toEqual({ voiceover: 1, bgm: 1, sfx: 1 });
 
     await orchestrator.settle();
     const final = orchestrator.snapshot();
@@ -141,7 +151,7 @@ describe('three-turn Golden Path', () => {
   });
 });
 
-function makeOrchestrator(options: { delayResult?: ResultDelay; videoProvider?: VideoProvider; onVideoCall?: () => void } = {}) {
+function makeOrchestrator(options: { delayResult?: ResultDelay; videoProvider?: VideoProvider; audioProvider?: AudioProvider; onVideoCall?: () => void } = {}) {
   let videoIndex = 0;
   const videoProvider: VideoProvider = options.videoProvider ?? {
     generate: async (input) => {
@@ -162,6 +172,7 @@ function makeOrchestrator(options: { delayResult?: ResultDelay; videoProvider?: 
         CreativePlanSchema.parse(state.version === 1 ? goldenProject.initialPlan : goldenProject.turn2Plan),
     },
     videoProvider,
+    audioProvider: options.audioProvider,
     renderPreview: async (input: RenderInput): Promise<VideoArtifact> => ({
       id: input.outputId,
       type: 'video',
@@ -172,4 +183,15 @@ function makeOrchestrator(options: { delayResult?: ResultDelay; videoProvider?: 
     }),
     delayResult: options.delayResult,
   });
+}
+
+function audioArtifact(id: string, stateVersion: number, sessionEpoch: number) {
+  return {
+    id,
+    type: 'audio' as const,
+    uri: 'demo/assets/campus_product_coffee.mp4',
+    source: 'live' as const,
+    stateVersion,
+    sessionEpoch,
+  };
 }

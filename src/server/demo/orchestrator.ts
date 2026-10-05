@@ -2,6 +2,8 @@ import type { Artifact, IntentPatch, ProjectState, TaskRecord } from '../../shar
 import { ArtifactSchema, ProjectStateSchema } from '../../shared/schemas.js';
 import type { RuntimeMetrics } from '../../shared/events.js';
 import type { CreativePlan } from '../tools/creativeTools.js';
+import type { AudioProvider } from '../providers/audioProvider.js';
+import { LocalAudioProvider } from '../providers/audioProvider.js';
 import type { VideoArtifact, VideoProvider } from '../providers/videoProvider.js';
 import { ArtifactRegistry } from '../runtime/artifactRegistry.js';
 import { EventLog, computeMetrics } from '../runtime/eventLog.js';
@@ -52,6 +54,7 @@ export interface DemoOrchestratorOptions {
   planner: DemoPlanner;
   replayPlanner?: DemoPlanner;
   videoProvider: VideoProvider;
+  audioProvider?: AudioProvider;
   renderPreview?: RenderPreviewFn;
   eventLog?: EventLog;
   artifactRegistry?: ArtifactRegistry;
@@ -79,6 +82,7 @@ export class DemoOrchestrator {
   private readonly planner: DemoPlanner;
   private readonly replayPlanner?: DemoPlanner;
   private readonly videoProvider: VideoProvider;
+  private readonly audioProvider: AudioProvider;
   private readonly previewRenderer: RenderPreviewFn;
   private readonly delayResult?: ResultDelay;
   private readonly allowHybridFallback: boolean;
@@ -87,6 +91,11 @@ export class DemoOrchestrator {
   private readonly scheduler: Scheduler;
   private readonly activeRuns = new Set<Promise<void>>();
   private readonly sceneArtifacts = new Map<string, VideoArtifact>();
+  private readonly audioArtifacts = {
+    voiceover: undefined as import('../../shared/schemas.js').AudioArtifact | undefined,
+    bgm: undefined as import('../../shared/schemas.js').AudioArtifact | undefined,
+    sfx: [] as import('../../shared/schemas.js').AudioArtifact[],
+  };
 
   private state: ProjectState | null = null;
   private graph: TaskGraph | null = null;
@@ -97,6 +106,7 @@ export class DemoOrchestrator {
     this.planner = options.planner;
     this.replayPlanner = options.replayPlanner;
     this.videoProvider = options.videoProvider;
+    this.audioProvider = options.audioProvider ?? new LocalAudioProvider();
     this.previewRenderer = options.renderPreview ?? renderPreviewReal;
     this.eventLog = options.eventLog ?? new EventLog();
     this.registry = options.artifactRegistry ?? new ArtifactRegistry();
@@ -244,6 +254,9 @@ export class DemoOrchestrator {
     this.graph = null;
     this.registry.clear();
     this.sceneArtifacts.clear();
+    this.audioArtifacts.voiceover = undefined;
+    this.audioArtifacts.bgm = undefined;
+    this.audioArtifacts.sfx = [];
     return { sessionEpoch: this.sessionEpoch, abortedTasks };
   }
 
@@ -291,7 +304,7 @@ export class DemoOrchestrator {
         }
       }
       const run = this.track(this.startTask(task));
-      if (task.type.startsWith('generated_scene:')) renderDependencies.push(run);
+      if (task.type.startsWith('generated_scene:') || task.type.startsWith('audio_')) renderDependencies.push(run);
       if (task.type === waitForTaskType) requestedRun = run;
     }
     const coordinator = Promise.allSettled(renderDependencies).then(async () => {
@@ -312,6 +325,9 @@ export class DemoOrchestrator {
   }
 
   private async startTask(task: TaskRecord): Promise<void> {
+    if (task.type === 'render' && this.state?.phase === 'PRODUCING') {
+      this.state = transitionProjectPhase(this.state, 'MIXING');
+    }
     task.status = 'running';
     task.startedAt = Date.now();
     this.eventLog.append(
@@ -322,7 +338,11 @@ export class DemoOrchestrator {
     try {
       const result = await this.scheduler.start(task);
       const disposition = acceptResult(result, this.state?.version ?? 0, this.sessionEpoch);
-      const artifact = ArtifactSchema.safeParse(result.value);
+      const rawValues = Array.isArray(result.value) ? result.value : [result.value];
+      const artifacts = rawValues
+        .map((value) => ArtifactSchema.safeParse(value))
+        .filter((parsed): parsed is { success: true; data: Artifact } => parsed.success)
+        .map((parsed) => parsed.data);
       if (disposition !== 'ACCEPT') {
         task.status = 'stale';
         task.finishedAt = Date.now();
@@ -333,7 +353,7 @@ export class DemoOrchestrator {
           graphTask.status = 'stale';
           graphTask.finishedAt = task.finishedAt;
         }
-        if (artifact.success) this.registry.register(artifact.data, disposition);
+        for (const artifact of artifacts) this.registry.register(artifact, disposition);
         this.eventLog.append(
           'STALE_RESULT_DROPPED',
           { taskId: task.id, taskType: task.type, disposition },
@@ -344,34 +364,38 @@ export class DemoOrchestrator {
 
       task.status = 'completed';
       task.finishedAt = Date.now();
-      if (artifact.success) {
-        this.registry.register(artifact.data, disposition);
-        task.artifactIds = [artifact.data.id];
+      if (artifacts.length > 0) {
+        for (const artifact of artifacts) this.registry.register(artifact, disposition);
+        task.artifactIds = artifacts.map((artifact) => artifact.id);
+        const artifact = artifacts[0]!;
+        if (task.type === 'audio_voiceover') this.audioArtifacts.voiceover = artifact as import('../../shared/schemas.js').AudioArtifact;
+        if (task.type === 'audio_bgm') this.audioArtifacts.bgm = artifact as import('../../shared/schemas.js').AudioArtifact;
+        if (task.type === 'audio_sfx') this.audioArtifacts.sfx = artifacts as import('../../shared/schemas.js').AudioArtifact[];
         if (task.type.startsWith('generated_scene:')) {
           const sceneId = task.type.slice('generated_scene:'.length);
-          this.sceneArtifacts.set(sceneId, artifact.data as VideoArtifact);
+          this.sceneArtifacts.set(sceneId, artifact as VideoArtifact);
           if (this.state) {
             this.state = ProjectStateSchema.parse({
               ...this.state,
-              generatedClips: [...this.state.generatedClips, artifact.data],
+              generatedClips: [...this.state.generatedClips, artifact],
             });
           }
         } else if (task.type === 'render' && this.state) {
           this.state = ProjectStateSchema.parse({
             ...this.state,
-            phase: this.state.phase === 'PRODUCING' ? 'COMPLETED' : this.state.phase,
-            preview: artifact.data,
+            phase: this.state.phase === 'MIXING' || this.state.phase === 'PRODUCING' ? 'COMPLETED' : this.state.phase,
+            preview: artifact,
           });
           this.eventLog.append(
             'PREVIEW_READY',
-            { artifactId: artifact.data.id },
+            { artifactId: artifact.id },
             this.context(this.state.version),
           );
         }
       }
       this.eventLog.append(
         'TASK_COMPLETED',
-        { taskId: task.id, taskType: task.type, artifactId: artifact.success ? artifact.data.id : undefined },
+          { taskId: task.id, taskType: task.type, artifactId: artifacts[0]?.id },
         this.context(task.stateVersion),
       );
     } catch (error) {
@@ -414,6 +438,52 @@ export class DemoOrchestrator {
       return { ...base, value: artifact };
     }
 
+    if (task.type === 'audio_voiceover' || task.type === 'audio_bgm' || task.type === 'audio_sfx') {
+      const script = this.state.script;
+      if (!script) throw new Error('Cannot generate audio before a script exists');
+      if (task.type === 'audio_voiceover') {
+        return {
+          ...base,
+          value: await this.audioProvider.generateVoiceover(
+            {
+              text: script.voiceover,
+              durationSec: script.durationSec,
+              stateVersion: task.stateVersion,
+              sessionEpoch,
+            },
+            signal,
+          ),
+        };
+      }
+      if (task.type === 'audio_bgm') {
+        return {
+          ...base,
+          value: await this.audioProvider.selectOrGenerateBgm(
+            {
+              style: script.audioPlan.bgm.style,
+              intensity: script.audioPlan.bgm.intensity,
+              durationSec: script.durationSec,
+              stateVersion: task.stateVersion,
+              sessionEpoch,
+            },
+            signal,
+          ),
+        };
+      }
+      return {
+        ...base,
+        value: await this.audioProvider.prepareSfx(
+          {
+            effects: script.audioPlan.soundEffects,
+            durationSec: script.durationSec,
+            stateVersion: task.stateVersion,
+            sessionEpoch,
+          },
+          signal,
+        ),
+      };
+    }
+
     if (task.type === 'render') {
       const clips = this.state.scenes.map((scene) => {
         let artifact: VideoArtifact | undefined;
@@ -434,16 +504,25 @@ export class DemoOrchestrator {
         if (!artifact) throw new Error(`No renderable artifact for ${scene.id}`);
         return {
           artifact,
-          durationSec: scene.durationSec,
-          caption: scene.narration ?? scene.visualDescription,
-        };
+              durationSec: scene.durationSec,
+              caption: scene.narration ?? scene.visualDescription,
+            };
       });
       return {
         ...base,
         value: await this.previewRenderer(
           {
-            clips,
-            outputId: `preview_v${task.stateVersion}`,
+              clips,
+              audioMix: {
+                voiceover: this.audioArtifacts.voiceover,
+                bgm: this.audioArtifacts.bgm,
+                sfx: (this.state.script?.audioPlan.soundEffects ?? []).map((effect, index) => ({
+                  artifact: this.audioArtifacts.sfx[index]!,
+                  atSec: effect.atSec,
+                })).filter((track) => Boolean(track.artifact)),
+                ducking: this.state.script?.audioPlan.ducking,
+              },
+              outputId: `preview_v${task.stateVersion}`,
             stateVersion: task.stateVersion,
             sessionEpoch,
           },
@@ -539,9 +618,16 @@ function buildProductionTasks(state: ProjectState, previousTasks: TaskRecord[]):
       ),
     );
   const renderDependencies = generated.map((task) => task.id);
+  const audioTasks = [
+    makeTask(state, 'audio_voiceover', 'audio_voiceover', ['script'], ['script', 'brief.duration']),
+    makeTask(state, 'audio_bgm', 'audio_bgm', ['script'], ['script', 'creative.style', 'creative.tone']),
+    makeTask(state, 'audio_sfx', 'audio_sfx', ['script'], ['script', 'creative.tone']),
+  ];
+  renderDependencies.push(...audioTasks.map((task) => task.id));
   return [
     ...planningTasks,
     ...generated,
+    ...audioTasks,
     makeTask(state, 'render', 'render', renderDependencies, ['scenes', 'creative', 'brief.duration']),
   ];
 }
