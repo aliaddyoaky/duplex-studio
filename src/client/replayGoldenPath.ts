@@ -46,7 +46,11 @@ const defaultApi: GoldenReplayApi = {
   setMode: () => setDemoMode('REPLAY'),
   reset: resetDemo,
   create: createProject,
-  confirm: confirmScript,
+  confirm: async () => {
+    const { state } = await fetchSnapshot();
+    if (!state) throw new Error('No replay project');
+    return confirmScript(state.projectId, state.version);
+  },
   patch: applyIntentPatch,
   waitForPreview: waitForPreviewVersion,
 };

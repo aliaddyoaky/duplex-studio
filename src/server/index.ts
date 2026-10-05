@@ -12,6 +12,7 @@ import { DeepSeekReasoningProvider } from './providers/reasoningProvider.js';
 import { MiniMaxVideoProvider, type VideoArtifact, type VideoProvider } from './providers/videoProvider.js';
 import { CreativePlanSchema } from './tools/creativeTools.js';
 import { AssetLibrary } from './assets/assetLibrary.js';
+import { GeminiVisionProvider } from './providers/visionProvider.js';
 
 try {
   process.loadEnvFile?.('.env.local');
@@ -36,6 +37,7 @@ const fallbackVideoByScene = Object.fromEntries(
 );
 
 const fixturePlanner: DemoPlanner = {
+  modelLabel: 'Replay fixture planner · local JSON',
   plan: async (state) =>
     CreativePlanSchema.parse(state.version === 1 ? goldenProject.initialPlan : goldenProject.turn2Plan),
 };
@@ -49,6 +51,7 @@ if (config.server.deepseekApiKey) {
       model: config.server.reasoningModel,
       reasoningEffort: 'low',
     }),
+    config.server.reasoningModel,
   );
 } else {
   planner = fixturePlanner;
@@ -68,9 +71,12 @@ if (config.server.minimaxApiKey) {
   };
 }
 
-const assetLibrary = new AssetLibrary();
+const assetLibrary = new AssetLibrary({
+  visionProvider: config.server.geminiApiKey ? new GeminiVisionProvider(config.server.geminiApiKey, config.server.visionModel) : undefined,
+});
 const orchestrator = new DemoOrchestrator({
   assetLibrary,
+  runtimeStatePath: 'data/runtime-state.json',
   planner,
   replayPlanner: fixturePlanner,
   videoProvider,
@@ -88,6 +94,7 @@ orchestrator.setMode(
       ? config.server.demoMode
       : 'HYBRID',
 );
+await orchestrator.restorePersisted();
 
 const app = createApp({
   assetLibrary,

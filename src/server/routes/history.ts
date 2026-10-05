@@ -33,9 +33,12 @@ export function createHistoryRouter(orchestrator: DemoOrchestrator): Router {
     if (!detail) return response.status(404).json({ error: 'TASK_NOT_FOUND' });
     return response.json(detail);
   });
-  router.post('/project/confirm-script', async (_request, response, next) => {
+  router.post('/project/confirm-script', async (request, response, next) => {
     try {
-      return response.json(await orchestrator.confirmScript());
+      const confirmation = z.object({ projectId: z.string().min(1), version: z.number().int().positive() }).safeParse(request.body);
+      if (!confirmation.success) return response.status(400).json({ error: '必须明确确认项目和脚本版本' });
+      if (orchestrator.snapshot().state?.projectId !== confirmation.data.projectId) return response.status(409).json({ error: '项目已变化，请重新确认' });
+      return response.json(await orchestrator.confirmScript(confirmation.data.version));
     } catch (error) {
       return next(error);
     }

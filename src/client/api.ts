@@ -43,8 +43,8 @@ export async function applyIntentPatch(patch: IntentPatch): Promise<{ stateVersi
   });
 }
 
-export async function confirmScript(): Promise<ProjectState> {
-  return requestJson<ProjectState>('/api/project/confirm-script', { method: 'POST', body: JSON.stringify({}) });
+export async function confirmScript(projectId: string, version: number): Promise<ProjectState> {
+  return requestJson<ProjectState>('/api/project/confirm-script', { method: 'POST', body: JSON.stringify({ projectId, version }) });
 }
 
 export async function fetchTaskDetail(taskId: string): Promise<TaskDetail> {
@@ -63,7 +63,7 @@ export async function fetchAssets(query?: string): Promise<Asset[]> {
   const response = await requestJson<Asset[] | Array<{ id: string; type: Asset['type']; uri: string; tags: string[] }>>(
     query ? `/api/assets?query=${encodeURIComponent(query)}` : '/api/assets',
   );
-  return response.map((asset) => ({ id: asset.id, type: asset.type, uri: asset.uri, tags: asset.tags }));
+  return response as Asset[];
 }
 
 export async function uploadAsset(file: File): Promise<Asset> {

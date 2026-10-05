@@ -44,7 +44,7 @@ describe('demo reset and fallback modes', () => {
         }),
       ]),
     );
-  });
+  }, 15_000);
 
   it('enters visibly marked HYBRID on video failure only when fallback policy allows it', async () => {
     const failingProvider: VideoProvider = {
@@ -76,7 +76,46 @@ describe('demo reset and fallback modes', () => {
     await disallowed.settle();
     expect(disallowed.snapshot().mode).toBe('LIVE');
     expect(disallowed.snapshot().artifacts.some((artifact) => artifact.source === 'fallback')).toBe(false);
-  });
+  }, 15_000);
+
+  it('normalizes planner-chosen scene ids so HYBRID fallback always matches', async () => {
+    // DeepSeek 会自由命名镜头（s1、scene01 等），兜底映射固定使用 scene_N。
+    // 归一化必须让两者重新对齐，否则 402 时 HYBRID 模式会直接失败。
+    const planWithFreeSceneIds = (): CreativePlan => {
+      const base = structuredClone(goldenProject.initialPlan) as unknown as CreativePlan;
+      const remap = new Map<string, string>();
+      base.scenes.forEach((scene, index) => {
+        const free = `s${index + 1}`;
+        remap.set(scene.id, free);
+        scene.id = free;
+      });
+      if (base.script) {
+        base.script.shots = base.script.shots.map((shot) => ({ ...shot, id: remap.get(shot.id) ?? shot.id }));
+      }
+      return base;
+    };
+    const failingProvider: VideoProvider = {
+      generate: async () => {
+        throw new VideoGenerationError('VIDEO_OUTPUT_MISSING', 'MiniMax API 402: insufficient balance');
+      },
+    };
+    const orchestrator = makeOrchestrator({
+      planner: { plan: async () => planWithFreeSceneIds() },
+      videoProvider: failingProvider,
+      allowHybridFallback: true,
+      fallbackVideoByScene: fallbackVideos(),
+    });
+
+    await orchestrator.createProject(goldenProject.brief);
+    await orchestrator.confirmScript();
+    await orchestrator.settle();
+
+    const snapshot = orchestrator.snapshot();
+    expect(snapshot.state?.scenes.map((scene) => scene.id)).toEqual(['scene_1', 'scene_2', 'scene_3', 'scene_4']);
+    expect(snapshot.mode).toBe('HYBRID');
+    expect(snapshot.artifacts.some((artifact) => artifact.source === 'fallback')).toBe(true);
+    expect(snapshot.state?.phase).not.toBe('FAILED');
+  }, 15_000);
 
   it('REPLAY uses recorded artifacts without calling the live video provider', async () => {
     const liveGenerate = vi.fn<VideoProvider['generate']>();

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 import { applyIntentPatch, confirmScript, createProject, fetchAssets, resetDemo, retryTask, setDemoMode, type DemoMode } from './api.js';
-import type { Asset } from '../shared/schemas.js';
+import type { Asset, ProjectState, TaskRecord } from '../shared/schemas.js';
 import { runGoldenReplay } from './replayGoldenPath.js';
 import { AgentBrain } from './components/AgentBrain.js';
 import { CreativeCanvas } from './components/CreativeCanvas.js';
@@ -58,8 +58,9 @@ export function App() {
   };
 
   const confirm = async () => {
+    if (!snapshot?.state) return;
     setBusy(true);
-    try { await confirmScript(); await refresh(); } catch (error) { dispatch({ type: 'ERROR', message: error instanceof Error ? error.message : String(error) }); } finally { setBusy(false); }
+    try { await confirmScript(snapshot.state.projectId, snapshot.state.version); await refresh(); } catch (error) { dispatch({ type: 'ERROR', message: error instanceof Error ? error.message : String(error) }); } finally { setBusy(false); }
   };
 
   const createFromBrief = async (brief: typeof GOLDEN_BRIEF) => {
@@ -106,7 +107,7 @@ export function App() {
             <button className="primary-action" onClick={() => void replayGoldenPath()} disabled={busy}>{busy ? '正在回放…' : '运行黄金回放'}</button>
           )}
           {!snapshot?.state && mode !== 'REPLAY' ? (
-            <button className="primary-action" onClick={() => void startDemo()} disabled={busy}>{busy ? '正在启动…' : '使用种子简报'}</button>
+            <button className="primary-action" onClick={() => void startDemo()} disabled={busy}>{busy ? '生成中…' : '使用种子简报'}</button>
           ) : snapshot?.state ? (
             <button className="reset-button" onClick={() => void reset()} disabled={busy}>↻ 重置演示</button>
           ) : null}
@@ -116,7 +117,7 @@ export function App() {
       {state.error && <div className="global-error">运行时：{state.error}</div>}
 
       <div className="studio-grid">
-        <div className="left-column"><RealtimePanel stateVersion={snapshot?.state?.version ?? 0} runtimeConnected={state.runtimeConnected} onProjectChanged={() => void refresh()} onConfirmScript={() => void confirm()} /><AssetLibrary assets={assets} onChanged={() => void refreshAssets()} /></div>
+        <div className="left-column"><RealtimePanel stateVersion={snapshot?.state?.version ?? 0} phase={snapshot?.state?.phase} projectId={snapshot?.state?.projectId} runtimeContext={buildRealtimeContext(snapshot?.state ?? null, snapshot?.tasks ?? [])} runtimeConnected={state.runtimeConnected} onProjectChanged={() => void refresh()} onConfirmScript={() => void confirm()} /><AssetLibrary assets={assets} onChanged={() => void refreshAssets()} /></div>
         <CreativeCanvas state={snapshot?.state ?? null} tasks={snapshot?.tasks ?? []} artifacts={snapshot?.artifacts ?? []} onCreateProject={(brief) => void createFromBrief(brief)} onConfirmScript={() => void confirm()} onChangeSource={(sceneId, source) => void changeSource(sceneId, source)} busy={busy} />
         <AgentBrain
           tasks={snapshot?.tasks ?? []}
@@ -137,6 +138,28 @@ export function App() {
       </div>
     </main>
   );
+}
+
+function buildRealtimeContext(state: ProjectState | null, tasks: TaskRecord[]): string {
+  if (!state) return '当前还没有项目。等待用户提供需求后创建项目。';
+  return JSON.stringify({
+    projectId: state.projectId,
+    version: state.version,
+    phase: state.phase,
+    brief: state.brief,
+    creative: state.creative,
+    script: state.script,
+    scenes: state.scenes,
+    tasks: tasks.map((task) => ({
+      id: task.id,
+      type: task.type,
+      status: task.status,
+      inputs: task.trace?.inputs,
+      outputs: task.trace?.outputs,
+      downstream: task.trace?.downstream,
+      error: task.trace?.error,
+    })),
+  }, null, 2);
 }
 
 function modeLabel(mode: DemoMode) {

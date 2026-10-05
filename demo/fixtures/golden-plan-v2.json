@@ -1,0 +1,22 @@
+{
+  "constraints": {
+    "platform": "douyin",
+    "sellingPoint": "low_sugar",
+    "style": "campus_vlog",
+    "duration": 15
+  },
+  "strategy": {
+    "hook": "真实课间，也能轻松低糖",
+    "rationale": "用大学生日常记录弱化商业广告感"
+  },
+  "script": {
+    "voiceover": "低糖，也可以很好喝。课间就轻松一点。",
+    "durationSec": 15
+  },
+  "scenes": [
+    {"id":"scene_1","durationSec":3,"visualDescription":"宿舍晨间生活记录","source":"generated_video","generationPrompt":"authentic college dorm vlog morning","needsImageReference":false},
+    {"id":"scene_2","durationSec":3,"visualDescription":"校园朋友自然聊天","source":"generated_video","generationPrompt":"authentic handheld campus friends vlog","needsImageReference":false},
+    {"id":"scene_3","durationSec":3,"visualDescription":"真实产品罐低糖信息","source":"existing_asset","assetQuery":"low sugar coffee can product","needsImageReference":false},
+    {"id":"scene_4","durationSec":6,"visualDescription":"草坪日常感收尾","source":"generated_video","generationPrompt":"casual college lawn vlog ending","needsImageReference":false}
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "constraints": {
+    "platform": "douyin",
+    "sellingPoint": "refreshing",
+    "style": "youth_ad",
+    "duration": 15
+  },
+  "strategy": {
+    "hook": "一口气泡，打开校园新鲜感",
+    "rationale": "用轻快校园节奏呈现新品体验"
+  },
+  "script": {
+    "voiceover": "课间来点新鲜气泡，今天也轻松一点。",
+    "durationSec": 15
+  },
+  "scenes": [
+    {"id":"scene_1","durationSec":3,"visualDescription":"宿舍晨间拿起咖啡","source":"generated_video","generationPrompt":"student dorm morning, sparkling coffee","needsImageReference":false},
+    {"id":"scene_2","durationSec":3,"visualDescription":"校园路上朋友聊天","source":"generated_video","generationPrompt":"college friends walking on campus","needsImageReference":false},
+    {"id":"scene_3","durationSec":3,"visualDescription":"产品罐特写","source":"existing_asset","assetQuery":"coffee can product closeup","needsImageReference":false},
+    {"id":"scene_4","durationSec":6,"visualDescription":"草坪轻松收尾","source":"generated_video","generationPrompt":"college lawn relaxed ending","needsImageReference":false}
+  ]
+}

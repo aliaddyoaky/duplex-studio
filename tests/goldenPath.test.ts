@@ -144,6 +144,7 @@ describe('three-turn Golden Path', () => {
     await orchestrator.settle();
 
     expect(updated.current.version).toBe(2);
+    expect(updated.current.phase).toBe('SCRIPT_REVIEW');
     expect(orchestrator.snapshot().events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ type: 'TASK_CANCELLED', payload: expect.objectContaining({ taskType: 'generated_scene:scene_3' }) }),

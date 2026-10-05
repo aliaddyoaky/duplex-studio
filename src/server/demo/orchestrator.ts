@@ -1,6 +1,9 @@
 import type { Artifact, IntentPatch, ProjectState, TaskRecord } from '../../shared/schemas.js';
 import { ArtifactSchema, ProjectStateSchema, type AudioArtifact } from '../../shared/schemas.js';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 import type { RuntimeMetrics } from '../../shared/events.js';
+import { reconcileScriptEdits } from '../runtime/scriptEdits.js';
 import { buildPlannerPrompt, type CreativePlan } from '../tools/creativeTools.js';
 import { AssetLibrary } from '../assets/assetLibrary.js';
 import type { AudioProvider } from '../providers/audioProvider.js';
@@ -25,6 +28,7 @@ import { ReplayCatalog } from './replay.js';
 import { HistoryStore, type HistorySnapshot } from '../history/historyStore.js';
 
 export interface DemoPlanner {
+  modelLabel?: string;
   plan(
     state: ProjectState,
     context: { reason: 'initial' | 'patch'; changedFields?: string[] },
@@ -67,6 +71,7 @@ export interface DemoOrchestratorOptions {
   replayCatalog?: ReplayCatalog;
   historyStore?: HistoryStore;
   assetLibrary?: AssetLibrary;
+  runtimeStatePath?: string;
 }
 
 export interface DemoSnapshot {
@@ -97,6 +102,7 @@ export class DemoOrchestrator {
   private readonly fallbackVideoByScene: Record<string, VideoArtifact>;
   private readonly replayCatalog?: ReplayCatalog;
   private readonly scheduler: Scheduler;
+  private readonly runtimeStatePath?: string;
   private readonly activeRuns = new Set<Promise<void>>();
   private readonly sceneArtifacts = new Map<string, VideoArtifact>();
   private readonly audioArtifacts = {
@@ -109,6 +115,8 @@ export class DemoOrchestrator {
   private graph: TaskGraph | null = null;
   private mode: DemoMode = 'LIVE';
   private sessionEpoch = 1;
+  private approvedVersion: number | null = null;
+  private editing = false;
 
   constructor(options: DemoOrchestratorOptions) {
     this.planner = options.planner;
@@ -124,6 +132,7 @@ export class DemoOrchestrator {
     this.fallbackVideoByScene = options.fallbackVideoByScene ?? {};
     this.replayCatalog = options.replayCatalog;
     this.historyStore = options.historyStore ?? new HistoryStore();
+    this.runtimeStatePath = options.runtimeStatePath ? resolve(options.runtimeStatePath) : undefined;
     this.scheduler = new Scheduler(
       (context) => {
         const result = this.executeTask(context);
@@ -131,6 +140,54 @@ export class DemoOrchestrator {
       },
       () => this.sessionEpoch,
     );
+  }
+
+  async restorePersisted(): Promise<void> {
+    if (!this.runtimeStatePath) return;
+    try {
+      const raw = await readFile(this.runtimeStatePath, 'utf8');
+      const persisted = JSON.parse(raw) as DemoSnapshot;
+      this.state = persisted.state ? ProjectStateSchema.parse(persisted.state) : null;
+      this.graph = persisted.graph ? structuredClone(persisted.graph) : null;
+      this.mode = persisted.mode ?? this.mode;
+      this.sessionEpoch = Math.max(1, persisted.sessionEpoch ?? this.sessionEpoch);
+      this.eventLog.restore(persisted.events ?? []);
+      this.registry.clear();
+      for (const artifact of persisted.artifacts ?? []) {
+        const parsed = ArtifactSchema.safeParse(artifact);
+        if (parsed.success) this.registry.register(parsed.data, 'ACCEPT');
+      }
+      const scriptTask = this.graph?.tasks.find((task) => task.type === 'script');
+      if (scriptTask?.trace && !scriptTask.trace.inputs.some((input) => input.kind === 'provider')) {
+        const modelLabel = this.currentPlanner().modelLabel ?? '未标注的脚本规划模型';
+        scriptTask.trace.inputs.unshift({
+          name: '脚本规划模型',
+          kind: 'provider',
+          ref: modelLabel,
+          summary: modelLabel,
+        });
+      }
+      if (this.state && ['PRODUCING', 'MIXING'].includes(this.state.phase)) {
+        this.state = ProjectStateSchema.parse({ ...this.state, phase: 'FAILED' });
+      }
+      if (this.state && ['PRODUCING', 'MIXING', 'FAILED'].includes(this.state.phase)) {
+        for (const task of this.graph?.tasks ?? []) {
+          if (['pending', 'running'].includes(task.status)) {
+            task.status = 'failed';
+            task.trace = {
+              inputs: task.trace?.inputs ?? [],
+              outputs: task.trace?.outputs ?? [],
+              downstream: task.trace?.downstream ?? [],
+              attempt: task.trace?.attempt ?? 1,
+              error: { code: 'RUNTIME_RESTARTED', message: '制作进程重启，未完成任务需要从当前脚本重新确认', retryable: true },
+            };
+          }
+        }
+      }
+      if (this.state || this.graph) await this.persistRuntimeState();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
 
   async createProject(brief: ProjectState['brief']): Promise<ProjectState> {
@@ -164,12 +221,18 @@ export class DemoOrchestrator {
     return structuredClone(this.state);
   }
 
-  async confirmScript(): Promise<ProjectState> {
+  async confirmScript(expectedVersion = this.state?.version): Promise<ProjectState> {
     if (!this.state || !this.graph) throw new Error('Create a project before confirming its script');
+    if (this.editing || this.planningController) throw new Error('脚本正在修改，请等待完成后确认');
+    if (expectedVersion !== this.state.version) throw new Error('脚本版本已变化，请确认最新版本');
     if (this.state.phase !== 'SCRIPT_REVIEW') {
       throw new Error(`Cannot confirm script while project is ${this.state.phase}`);
     }
+    if (!this.state.script || this.state.scenes.length === 0 || this.state.script.shots.length !== this.state.scenes.length) {
+      throw new Error('Cannot confirm an incomplete script; every scene needs a structured shot');
+    }
 
+    this.approvedVersion = this.state.version;
     this.state = transitionProjectPhase(this.state, 'PRODUCING');
     this.graph = {
       version: this.state.version,
@@ -187,6 +250,13 @@ export class DemoOrchestrator {
   }
 
   async applyPatch(patch: IntentPatch): Promise<PatchCommitResult> {
+    if (this.editing) throw new Error('脚本正在修改，请稍后重试');
+    this.editing = true;
+    try { return await this.applyPatchInternal(patch); }
+    finally { this.editing = false; }
+  }
+
+  private async applyPatchInternal(patch: IntentPatch): Promise<PatchCommitResult> {
     if (!this.state || !this.graph) throw new Error('Create a project before applying intent patches');
     const previousVersion = this.state.version;
     const patchEpoch = this.sessionEpoch;
@@ -194,10 +264,24 @@ export class DemoOrchestrator {
       (task) => task.stateVersion === previousVersion && task.status !== 'cancelled',
     );
     const committed = commitIntentPatch(this.state, patch);
+    this.approvedVersion = null;
     this.state = committed.current;
     this.state.preview = undefined;
+    reconcileScriptEdits(this.state, committed.changedFields);
     this.state.script = syncScriptWithScenes(this.state);
-    if (this.state.phase === 'COMPLETED' || this.state.phase === 'FAILED') {
+    const requiresScriptReview = ['PRODUCING', 'MIXING', 'COMPLETED', 'FAILED'].includes(this.state.phase);
+    if (requiresScriptReview) {
+      for (const task of currentTasks) {
+        this.scheduler.cancel(task.id);
+        if (!['completed', 'cancelled', 'stale'].includes(task.status)) {
+          task.status = 'cancelled';
+          this.eventLog.append(
+            'TASK_CANCELLED',
+            { taskId: task.id, taskType: task.type, reason: 'script_review_required' },
+            this.context(this.state.version),
+          );
+        }
+      }
       this.state = transitionProjectPhase(this.state, 'SCRIPT_REVIEW');
     }
     this.eventLog.append(
@@ -280,6 +364,7 @@ export class DemoOrchestrator {
   }
 
   reset(): { sessionEpoch: number; abortedTasks: number } {
+    this.approvedVersion = null;
     this.planningController?.abort();
     this.planningController = undefined;
     const abortedTasks = this.scheduler.cancelAll();
@@ -291,6 +376,7 @@ export class DemoOrchestrator {
     this.audioArtifacts.voiceover = undefined;
     this.audioArtifacts.bgm = undefined;
     this.audioArtifacts.sfx = [];
+    if (this.runtimeStatePath) void unlink(this.runtimeStatePath).catch(() => undefined);
     return { sessionEpoch: this.sessionEpoch, abortedTasks };
   }
 
@@ -522,9 +608,20 @@ export class DemoOrchestrator {
       sessionEpoch,
     };
     if (!this.state) return base;
+    if (!['product_analysis', 'script', 'asset_search', 'storyboard', 'prompt_lint'].includes(task.type)) {
+      if (signal.aborted || sessionEpoch !== this.sessionEpoch || task.stateVersion !== this.state.version || this.approvedVersion !== task.stateVersion) {
+        throw new Error('制作授权已失效，请确认当前脚本版本');
+      }
+    }
 
     if (['product_analysis', 'script', 'asset_search', 'storyboard', 'prompt_lint'].includes(task.type)) {
       if (task.type === 'script') {
+        task.trace?.inputs.push({
+          name: '脚本规划模型',
+          kind: 'provider',
+          ref: this.currentPlanner().modelLabel ?? 'reasoning-provider',
+          summary: this.currentPlanner().modelLabel ?? '未标注的脚本规划模型',
+        });
         task.trace?.inputs.push({ name: '规划提示词', kind: 'prompt', summary: buildPlannerPrompt(this.state) });
         return { ...base, value: this.state.script };
       }
@@ -538,12 +635,14 @@ export class DemoOrchestrator {
       const sceneId = task.type.slice('generated_scene:'.length);
       const scene = this.state.scenes.find((candidate) => candidate.id === sceneId);
       if (!scene) throw new Error(`Unknown scene task ${sceneId}`);
+      const prompt = `${scene.generationPrompt ?? scene.visualDescription}\nSilent video only. No music, voiceover or sound effects.`;
+      task.trace?.inputs.push({ name: '视频生成请求', kind: 'provider_request', summary: JSON.stringify({ sceneId, prompt, stateVersion: task.stateVersion }) });
       this.eventLog.append(
         'VIDEO_JOB_SUBMITTED',
-        { taskId: task.id, sceneId, mode: this.mode },
+        { taskId: task.id, sceneId, mode: this.mode, prompt, approvedVersion: this.approvedVersion },
         this.context(task.stateVersion),
       );
-      const artifact = await this.generateSceneVideo(sceneId, `${scene.generationPrompt ?? scene.visualDescription}\nSilent video only. No music, voiceover or sound effects.`, task, signal);
+      const artifact = await this.generateSceneVideo(sceneId, prompt, task, signal);
       this.eventLog.append(
         'VIDEO_JOB_COMPLETED',
         { taskId: task.id, sceneId, source: artifact.source },
@@ -622,7 +721,7 @@ export class DemoOrchestrator {
         return {
           artifact,
           durationSec: scene.durationSec,
-          startSec: scene.startSec,
+          startSec: scene.startSec ?? this.state!.script?.shots.find((shot) => shot.id === scene.id)?.existingClip?.startSec,
               caption: scene.narration ?? scene.visualDescription,
             };
       }));
@@ -709,29 +808,63 @@ export class DemoOrchestrator {
       events: snapshot.events,
     };
     await this.historyStore.saveVersion(history);
+    await this.persistRuntimeState(snapshot);
+  }
+
+  private async persistRuntimeState(snapshot = this.snapshot()): Promise<void> {
+    if (!this.runtimeStatePath) return;
+    await mkdir(dirname(this.runtimeStatePath), { recursive: true });
+    const temporary = `${this.runtimeStatePath}.${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`;
+    await writeFile(temporary, JSON.stringify(snapshot, null, 2));
+    await rename(temporary, this.runtimeStatePath);
   }
 }
 
 function applyCreativePlan(state: ProjectState, plan: CreativePlan): ProjectState {
+  const normalized = normalizePlanSceneIds(plan);
   const next = ProjectStateSchema.parse({
     ...state,
     creative: {
       ...state.creative,
-      sellingPoint: plan.constraints.sellingPoint,
-      style: plan.constraints.style,
+      sellingPoint: normalized.constraints.sellingPoint,
+      style: normalized.constraints.style,
+      hook: normalized.strategy.hook,
+      rationale: normalized.strategy.rationale,
     },
-    script: plan.script,
-    scenes: plan.scenes,
+    script: normalized.script,
+    scenes: normalized.scenes,
   });
   next.script = syncScriptWithScenes(next);
   return next;
+}
+
+// 规划器（DeepSeek）会自由命名镜头 id（如 s1、scene01），统一归一化为
+// scene_1..scene_N：保证混合模式兜底映射、任务命名与语音 patch 路径稳定一致。
+function normalizePlanSceneIds(plan: CreativePlan): CreativePlan {
+  if (plan.scenes.every((scene, index) => scene.id === `scene_${index + 1}`)) return plan;
+  const idByOldId = new Map<string, string>();
+  const scenes = plan.scenes.map((scene, index) => {
+    const nextId = `scene_${index + 1}`;
+    idByOldId.set(scene.id, nextId);
+    return { ...scene, id: nextId };
+  });
+  const script = plan.script
+    ? {
+        ...plan.script,
+        shots: plan.script.shots.map((shot, index) => ({
+          ...shot,
+          id: idByOldId.get(shot.id) ?? `scene_${index + 1}`,
+        })),
+      }
+    : plan.script;
+  return { ...plan, scenes, script };
 }
 
 function syncScriptWithScenes(state: ProjectState): ProjectState['script'] {
   if (!state.script) return undefined;
   const script = structuredClone(state.script);
   script.shots = state.scenes.map((scene, index) => {
-    const planned = script.shots[index];
+    const planned = script.shots.find((shot) => shot.id === scene.id) ?? script.shots[index];
     const candidates = state.assets.filter((asset) => asset.type === 'video' && `${asset.filename ?? ''} ${asset.tags.join(' ')}`.toLowerCase().includes((scene.assetQuery ?? scene.visualDescription).toLowerCase())).map((asset) => asset.id);
     const assetId = scene.assetId ?? candidates[0] ?? planned?.existingClip?.assetId;
     return {

@@ -1,0 +1,10 @@
+.superpowers/
+node_modules/
+dist/
+.env
+.env.local
+data/
+coverage/
+*.log
+.DS_Store
+.playwright-cli/

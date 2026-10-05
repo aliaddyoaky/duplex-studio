@@ -31,6 +31,8 @@ export function createInitialState(brief: ProjectState['brief']): ProjectState {
       sellingPoint: '',
       style: '',
       tone: '',
+      hook: '',
+      rationale: '',
     },
     scenes: [],
     assets: [],
@@ -43,7 +45,7 @@ const allowedTransitions: Record<ProjectPhase, ProjectPhase[]> = {
   BRIEFING: ['SCRIPT_REVIEW', 'FAILED'],
   SCRIPT_REVIEW: ['BRIEFING', 'PRODUCING', 'FAILED'],
   PRODUCING: ['MIXING', 'SCRIPT_REVIEW', 'FAILED'],
-  MIXING: ['COMPLETED', 'PRODUCING', 'FAILED'],
+  MIXING: ['COMPLETED', 'SCRIPT_REVIEW', 'FAILED'],
   COMPLETED: ['SCRIPT_REVIEW', 'FAILED'],
   FAILED: ['SCRIPT_REVIEW', 'PRODUCING', 'FAILED'],
 };
@@ -117,6 +119,9 @@ export function commitIntentPatch(
   const changedFields: string[] = [];
 
   for (const [path, value] of Object.entries(patch.changes)) {
+    if (!/^(brief|creative|script|scenes)\./.test(path) || path.split('.').some((part) => ['__proto__', 'prototype', 'constructor'].includes(part))) {
+      throw new Error(`Editing runtime field '${path}' is not allowed; confirm the script separately`);
+    }
     if (!Object.is(readPath(previous, path), value)) {
       writePath(next, path, value);
       changedFields.push(path);

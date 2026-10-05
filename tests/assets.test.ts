@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { AssetLibrary, MAX_UPLOAD_BYTES } from '../src/server/assets/assetLibrary.js';
 import { createApp } from '../src/server/app.js';
+import type { VisionProvider } from '../src/server/providers/visionProvider.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -59,6 +60,32 @@ describe('local asset library', () => {
     expect(tagged.tags).toEqual(['校园', '咖啡']);
     expect((await library.search('咖啡'))[0]?.id).toBe(first.id);
   });
+
+  it('indexes duration and time-coded segments for a real uploaded video', async () => {
+    const { library } = await makeLibrary();
+    const asset = await library.upload({
+      filename: 'long-source.mp4',
+      mimeType: 'video/mp4',
+      bytes: await readFile('demo/assets/campus_walk.mp4'),
+    });
+    expect(asset.analysisStatus).toBe('ready');
+    expect(asset.durationSec).toBeGreaterThan(0);
+    expect(asset.segments.length).toBeGreaterThan(0);
+    expect(asset.segments[0]).toMatchObject({ startSec: 0 });
+  }, 20_000);
+
+  it('stores vision labels and materialized semantic clips for uploaded video', async () => {
+    const { library, root } = await makeLibrary();
+    const visionProvider: VisionProvider = {
+      model: 'test-vision',
+      analyze: async (_video, durationSec) => [{ startSec: 0, endSec: durationSec, description: '校园里人物拿着产品走过镜头', tags: ['校园', '人物', '产品'], confidence: 0.94 }],
+    };
+    const semanticLibrary = new AssetLibrary({ storageDir: join(root, 'semantic-uploads'), metadataPath: join(root, 'semantic.json'), visionProvider });
+    const asset = await semanticLibrary.upload({ filename: 'semantic.mp4', mimeType: 'video/mp4', bytes: await readFile('demo/assets/campus_walk.mp4') });
+    expect(asset.analysisModel).toBe('test-vision');
+    expect(asset.segments[0]).toMatchObject({ tags: ['校园', '人物', '产品'], confidence: 0.94 });
+    await expect(stat(join(root, 'semantic-uploads', asset.segments[0]!.uri!.split('/').pop()!))).resolves.toBeTruthy();
+  }, 30_000);
 });
 
 describe('asset routes', () => {

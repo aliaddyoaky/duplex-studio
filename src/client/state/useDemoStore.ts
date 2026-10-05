@@ -61,7 +61,7 @@ export function demoReducer(state: DemoViewState, action: DemoAction): DemoViewS
         : state.previousProjectState;
     return { ...state, snapshot: structuredClone(action.snapshot), previousProjectState, error: null };
   }
-  if (action.type === 'CONNECTION') return { ...state, runtimeConnected: action.connected };
+  if (action.type === 'CONNECTION') return { ...state, runtimeConnected: action.connected, error: action.connected ? null : state.error };
   if (action.type === 'ERROR') return { ...state, error: action.message };
   if (action.type === 'SELECT_TASK') return { ...state, selectedTaskId: action.taskId };
 
@@ -73,7 +73,7 @@ export function demoReducer(state: DemoViewState, action: DemoAction): DemoViewS
   const taskId = typeof action.event.payload.taskId === 'string' ? action.event.payload.taskId : undefined;
   if (snapshot && taskId) {
     const task = snapshot.tasks.find((candidate) => candidate.id === taskId);
-    if (task) projectTaskStatus(task, action.event.type);
+    if (task) projectTaskStatus(task, action.event);
   }
   const staleTaskIds =
     action.event.type === 'STALE_RESULT_DROPPED' && taskId && !state.staleTaskIds.includes(taskId)
@@ -82,11 +82,15 @@ export function demoReducer(state: DemoViewState, action: DemoAction): DemoViewS
   return { ...state, snapshot, events, staleTaskIds };
 }
 
-function projectTaskStatus(task: TaskRecord, eventType: RuntimeEvent['type']): void {
-  if (eventType === 'TASK_STARTED') task.status = 'running';
-  else if (eventType === 'TASK_COMPLETED' || eventType === 'TASK_REUSED') task.status = 'completed';
-  else if (eventType === 'TASK_CANCELLED') task.status = 'cancelled';
-  else if (eventType === 'STALE_RESULT_DROPPED') task.status = 'stale';
+function projectTaskStatus(task: TaskRecord, event: RuntimeEvent): void {
+  if (event.type === 'TASK_STARTED') task.status = 'running';
+  else if (event.type === 'TASK_COMPLETED' || event.type === 'TASK_REUSED') task.status = 'completed';
+  else if (event.type === 'TASK_CANCELLED') task.status = 'cancelled';
+  else if (event.type === 'STALE_RESULT_DROPPED') task.status = 'stale';
+  else if (event.type === 'VIDEO_JOB_SUBMITTED' || event.type === 'VIDEO_JOB_PROGRESS') task.status = 'running';
+  else if (event.type === 'VIDEO_JOB_COMPLETED') {
+    task.status = event.payload.status === 'failed' ? 'failed' : 'completed';
+  }
 }
 
 export function selectMetrics(state: DemoViewState) {
@@ -128,6 +132,20 @@ function flattenState(value: unknown, prefix = '', output: Record<string, unknow
   return output;
 }
 
+const REFRESH_EVENT_TYPES: ReadonlySet<RuntimeEvent['type']> = new Set([
+  'STATE_UPDATED',
+  'NEW_TASK_GRAPH_STARTED',
+  'PREVIEW_READY',
+  'INTENT_PATCH_COMMITTED',
+  'TASK_STARTED',
+  'TASK_COMPLETED',
+  'TASK_REUSED',
+  'TASK_CANCELLED',
+  'STALE_RESULT_DROPPED',
+  'VIDEO_JOB_SUBMITTED',
+  'VIDEO_JOB_COMPLETED',
+]);
+
 export function useDemoStore() {
   const [state, dispatch] = useReducer(demoReducer, undefined, createInitialDemoState);
   const refresh = useCallback(async () => {
@@ -144,7 +162,7 @@ export function useDemoStore() {
       onSnapshot: (snapshot) => dispatch({ type: 'SNAPSHOT', snapshot }),
       onEvent: (event) => {
         dispatch({ type: 'RUNTIME_EVENT', event });
-        if (['STATE_UPDATED', 'NEW_TASK_GRAPH_STARTED', 'PREVIEW_READY'].includes(event.type)) {
+        if (REFRESH_EVENT_TYPES.has(event.type)) {
           void refresh();
         }
       },

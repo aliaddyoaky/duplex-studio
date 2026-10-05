@@ -14,7 +14,8 @@ export function CreativeCanvas(props: {
 }) {
   const preview = props.state?.preview;
   const renderTask = props.tasks.find((task) => task.type === 'render' && task.stateVersion === props.state?.version);
-  const renderFailed = renderTask?.status === 'failed';
+  // phase 已 FAILED（如视频额度不足导致镜头全部失败）时，渲染永远不会执行，应直接提示失败
+  const renderFailed = renderTask?.status === 'failed' || props.state?.phase === 'FAILED';
   return (
     <section className="panel canvas-panel">
       <div className="panel-heading canvas-heading">

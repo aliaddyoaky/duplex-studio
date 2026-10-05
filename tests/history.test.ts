@@ -80,7 +80,8 @@ describe('HistoryStore', () => {
     expect((await request(app).get('/api/project/history')).body[0]).toMatchObject({ version: 1, phase: 'SCRIPT_REVIEW' });
     expect((await request(app).get('/api/tasks/script')).status).toBe(200);
 
-    const confirmed = await request(app).post('/api/project/confirm-script').send({});
+    expect((await request(app).post('/api/project/confirm-script').send({})).status).toBe(400);
+    const confirmed = await request(app).post('/api/project/confirm-script').send({ projectId: created.body.projectId, version: 1 });
     expect(confirmed.status).toBe(200);
     await orchestrator.settle();
     const version = await request(app).get('/api/project/history/1');
@@ -105,8 +106,8 @@ describe('HistoryStore', () => {
       renderPreview: async (input) => ({ id: input.outputId, type: 'video' as const, uri: 'demo/assets/campus_walk.mp4', source: 'live' as const, stateVersion: input.stateVersion, sessionEpoch: input.sessionEpoch }),
     });
     const app = createApp({ demoOrchestrator: orchestrator });
-    await request(app).post('/api/project').send(goldenProject.brief);
-    await request(app).post('/api/project/confirm-script').send({});
+    const created = await request(app).post('/api/project').send(goldenProject.brief);
+    await request(app).post('/api/project/confirm-script').send({ projectId: created.body.projectId, version: 1 });
     await orchestrator.settle();
 
     const failed = await request(app).get('/api/tasks/generate_scene_3');

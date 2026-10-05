@@ -1,0 +1,40 @@
+{
+  "name": "duplex-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n web,server \"vite\" \"tsx watch src/server/index.ts\"",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "smoke:planner": "tsx scripts/smoke-planner.ts",
+    "smoke:video": "tsx scripts/smoke-video.ts",
+    "smoke:live-token": "tsx scripts/smoke-live-token.ts",
+    "check:env": "tsx scripts/check-env.ts"
+  },
+  "dependencies": {
+    "@google/genai": "latest",
+    "express": "^5.1.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.7.0",
+    "@types/react": "^19.1.16",
+    "@types/react-dom": "^19.1.9",
+    "@types/supertest": "^6.0.3",
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "^9.2.1",
+    "supertest": "^7.1.4",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "vite": "latest",
+    "vitest": "latest"
+  }
+}

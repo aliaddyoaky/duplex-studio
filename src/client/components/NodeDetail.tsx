@@ -1,4 +1,5 @@
 import type { TaskRecord } from '../../shared/schemas.js';
+import { friendlyErrorMessage } from '../friendlyErrors.js';
 
 export function NodeDetail(props: { task: TaskRecord | null; onRetry?: (taskId: string) => void }) {
   if (!props.task) {
@@ -12,7 +13,7 @@ export function NodeDetail(props: { task: TaskRecord | null; onRetry?: (taskId: 
       <details open><summary>输入</summary>{trace?.inputs?.length ? trace.inputs.map((item) => <div className="trace-row" key={`${item.name}-${item.ref}`}><b>{item.name}</b><span>{item.summary}</span></div>) : <p className="empty-copy">暂无输入摘要</p>}</details>
       <details><summary>输出</summary>{trace?.outputs?.length ? trace.outputs.map((item) => <div className="trace-row" key={`${item.name}-${item.ref}`}><b>{item.name}</b><span>{item.summary}</span></div>) : <p className="empty-copy">暂无输出</p>}</details>
       <details><summary>下游</summary>{trace?.downstream?.length ? <p className="trace-list">{trace.downstream.join(' → ')}</p> : <p className="empty-copy">没有下游节点</p>}</details>
-      {trace?.error && <details open className="detail-error"><summary>错误</summary><p>{trace.error.code}: {trace.error.message}</p>{trace.error.retryable && props.onRetry && <button className="text-button" onClick={() => props.onRetry?.(props.task!.id)}>重试此节点</button>}</details>}
+      {trace?.error && <details open className="detail-error"><summary>错误</summary><p>{friendlyErrorMessage(trace.error.message)}</p><p className="detail-error-raw">{trace.error.code}: {trace.error.message}</p>{trace.error.retryable && props.onRetry && <button className="text-button" onClick={() => props.onRetry?.(props.task!.id)}>重试此节点</button>}</details>}
     </aside>
   );
 }

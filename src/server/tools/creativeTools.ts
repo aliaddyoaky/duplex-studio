@@ -42,7 +42,7 @@ export function buildPlannerPrompt(state: ProjectState, repairFeedback?: string)
     'Return exactly four scenes and preserve every explicit constraint in the constraints object.',
     'Choose source=generated_video for scenes worth generating and existing_asset when real product footage is preferable.',
     'Return a structured script with one unified audioPlan and a shot entry for every scene; never attach BGM or SFX to generated video output.',
-    'Use the availableAssets catalog and prefer matching user-uploaded assets when they fit. Keep shot ids equal to scene ids, shot order and durations aligned. Include a source reason, existingClip.assetId and trim range or aigcPrompt. Do not invent asset ids. All descriptions, reasons, narration and directions must be in Chinese.',
+    'Use the availableAssets catalog and prefer matching user-uploaded video assets when they are semantically compatible. When the catalog contains uploaded videos, at least half of the scenes must reuse existing assets unless a shot genuinely needs synthetic visuals; reserve generated_video for product hero shots or scenes the catalog cannot plausibly cover. A usable source clip may be longer or shorter than the target shot: choose a trim range when the source can cover at least 70% of the shot, and allow speed adjustment or a small loop rather than rejecting it for an exact-duration mismatch. Keep shot ids equal to scene ids, shot order and durations aligned. Include a source reason, existingClip.assetId and trim range or aigcPrompt. Do not invent asset ids. All descriptions, reasons, narration and directions must be in Chinese.',
     authoritativeState,
     repairFeedback ? `Previous plan validation failed. Repair this issue: ${repairFeedback}` : '',
   ]

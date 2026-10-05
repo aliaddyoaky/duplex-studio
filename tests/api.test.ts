@@ -26,6 +26,8 @@ const minimalProject = {
     sellingPoint: 'refreshing',
     style: 'youth_ad',
     tone: 'relaxed',
+    hook: '',
+    rationale: '',
   },
   scenes: [],
   assets: [],
@@ -48,6 +50,7 @@ describe('project shell contracts', () => {
     const config = loadConfig({
       GEMINI_API_KEY: 'super-secret-key',
       GEMINI_LIVE_MODEL: 'gemini-3.8-live',
+      GEMINI_VISION_MODEL: 'gemini-3.8-flash',
       DEEPSEEK_API_KEY: 'deepseek-secret-key',
       DEEPSEEK_MODEL: 'deepseek-v4-pro',
       MINIMAX_API_KEY: 'minimax-secret-key',
@@ -59,7 +62,7 @@ describe('project shell contracts', () => {
     expect(config.server.geminiApiKey).toBe('super-secret-key');
     expect(config.server.deepseekApiKey).toBe('deepseek-secret-key');
     expect(config.server.minimaxApiKey).toBe('minimax-secret-key');
-    expect(config.client).toEqual({ liveModel: 'gemini-3.8-live' });
+    expect(config.client).toEqual({ liveModel: 'gemini-3.8-live', visionModel: 'gemini-3.8-flash' });
     expect(JSON.stringify(config.client)).not.toContain('super-secret-key');
     expect(JSON.stringify(config.client)).not.toContain('deepseek-secret-key');
     expect(JSON.stringify(config.client)).not.toContain('minimax-secret-key');

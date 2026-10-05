@@ -1,0 +1,29 @@
+[
+  {
+    "id": "campus_product_coffee",
+    "type": "video",
+    "uri": "demo/assets/campus_product_coffee.mp4",
+    "tags": ["campus", "product", "coffee", "young", "lifestyle", "校园", "产品", "咖啡"],
+    "description": "Synthetic campus product lifestyle placeholder",
+    "provenance": "self-generated demo fixture",
+    "license": "self-generated"
+  },
+  {
+    "id": "coffee_closeup",
+    "type": "video",
+    "uri": "demo/assets/coffee_closeup.mp4",
+    "tags": ["product", "coffee", "can", "low", "sugar", "closeup", "低糖", "气泡", "开罐", "特写", "咖啡", "产品"],
+    "description": "Synthetic product close-up placeholder",
+    "provenance": "self-generated demo fixture",
+    "license": "self-generated"
+  },
+  {
+    "id": "campus_walk",
+    "type": "video",
+    "uri": "demo/assets/campus_walk.mp4",
+    "tags": ["campus", "young", "friends", "lifestyle", "walk", "校园", "大学生"],
+    "description": "Synthetic campus walk placeholder",
+    "provenance": "self-generated demo fixture",
+    "license": "self-generated"
+  }
+]

@@ -9,14 +9,15 @@ import { HistoryStore } from '../src/server/history/historyStore.js';
 import { CreativePlanSchema } from '../src/server/tools/creativeTools.js';
 import type { ProjectState } from '../src/shared/schemas.js';
 
-async function harness(planner?: ConstructorParameters<typeof DemoOrchestrator>[0]['planner']) {
-  const dir = await mkdtemp(join(tmpdir(), 'duplex-regression-'));
+async function harness(planner?: ConstructorParameters<typeof DemoOrchestrator>[0]['planner'], existingDir?: string) {
+  const dir = existingDir ?? await mkdtemp(join(tmpdir(), 'duplex-regression-'));
   const assets = new AssetLibrary({ storageDir: join(dir, 'uploads'), metadataPath: join(dir, 'library.json') });
   const render = vi.fn(async (input) => ({ id: input.outputId, type: 'video' as const, uri: 'demo/assets/campus_walk.mp4', source: 'live' as const, stateVersion: input.stateVersion, sessionEpoch: input.sessionEpoch }));
   const orchestrator = new DemoOrchestrator({
     assetLibrary: assets,
+    runtimeStatePath: join(dir, 'runtime-state.json'),
     historyStore: new HistoryStore({ rootDir: join(dir, 'projects') }),
-    planner: planner ?? { plan: async () => CreativePlanSchema.parse(golden.initialPlan) },
+    planner: planner ?? { modelLabel: 'Test planner', plan: async () => CreativePlanSchema.parse(golden.initialPlan) },
     videoProvider: { generate: async (input) => ({ id: crypto.randomUUID(), type: 'video', uri: 'demo/assets/campus_walk.mp4', source: 'live', stateVersion: input.stateVersion, sessionEpoch: input.sessionEpoch }) },
     renderPreview: render,
     audioProvider: {
@@ -25,10 +26,33 @@ async function harness(planner?: ConstructorParameters<typeof DemoOrchestrator>[
       prepareSfx: async () => [],
     },
   });
-  return { orchestrator, assets, render };
+  return { orchestrator, assets, render, dir };
 }
 
 describe('workflow integration regressions', () => {
+  it('commits shot edits to the production prompt and waits for the edited version to be confirmed', async () => {
+    const { orchestrator } = await harness();
+    await orchestrator.createProject(golden.brief);
+    const edited = await orchestrator.applyPatch({ patchId: 'real-edit', baseVersion: 1, userSummary: '改成图书馆开箱', changes: {
+      'script.shots.scene_1.visualDescription': '图书馆里打开咖啡礼盒',
+      'script.shots.scene_1.voiceover': '一起打开新一天',
+    } });
+    expect(edited.current.scenes[0]?.generationPrompt).toContain('图书馆里打开咖啡礼盒');
+    expect(edited.current.script?.voiceover).toContain('一起打开新一天');
+    expect(orchestrator.snapshot().tasks.some((task) => task.type.startsWith('generated_scene:'))).toBe(false);
+    await expect(orchestrator.confirmScript(1)).rejects.toThrow(/version|版本/i);
+    await orchestrator.confirmScript(2);
+    await orchestrator.settle();
+    expect(orchestrator.taskDetail('generate_scene_1')?.task.trace?.inputs.find((input) => input.name === '视频生成请求')?.summary).toContain('图书馆里打开咖啡礼盒');
+  });
+
+  it('rejects voice patches that attempt to enter production or overwrite runtime fields', async () => {
+    const { orchestrator } = await harness();
+    await orchestrator.createProject(golden.brief);
+    await expect(orchestrator.applyPatch({ patchId: 'bypass', baseVersion: 1, userSummary: '开始', changes: { phase: 'PRODUCING' } })).rejects.toThrow();
+    expect(orchestrator.snapshot().state?.phase).toBe('SCRIPT_REVIEW');
+  });
+
   it('passes uploaded assets into the planner and honors an explicit clip selection', async () => {
     const plan = vi.fn(async () => CreativePlanSchema.parse(golden.initialPlan));
     const { orchestrator, assets, render } = await harness({ plan });
@@ -62,5 +86,20 @@ describe('workflow integration regressions', () => {
     expect(task?.trace?.durationMs).toBeTypeOf('number');
     expect(task?.trace?.outputs[0]?.summary).toContain('课间');
     expect(task?.trace?.inputs.some((input) => input.kind === 'prompt')).toBe(true);
+    expect(task?.trace?.inputs.find((input) => input.kind === 'provider')?.summary).toBe('Test planner');
+  });
+
+  it('restores the current project context after the runtime process restarts', async () => {
+    const first = await harness();
+    const created = await first.orchestrator.createProject(golden.brief);
+    const second = await harness(undefined, first.dir);
+    await second.orchestrator.restorePersisted();
+    expect(second.orchestrator.snapshot().state).toMatchObject({
+      projectId: created.projectId,
+      phase: 'SCRIPT_REVIEW',
+      version: 1,
+    });
+    expect(second.orchestrator.snapshot().tasks.find((task) => task.type === 'script')?.trace?.outputs[0]?.summary).toContain('课间');
+    expect(second.orchestrator.snapshot().tasks.find((task) => task.type === 'script')?.trace?.inputs.find((input) => input.kind === 'provider')?.summary).toBe('Test planner');
   });
 });

@@ -28,6 +28,9 @@ export function AgentBrain(props: { tasks: TaskRecord[]; events: RuntimeEvent[];
           </button>
         ))}
       </div>
+      {props.tasks.find((task) => task.type === 'script')?.trace?.inputs.find((input) => input.kind === 'provider') && (
+        <div className="model-note">脚本模型：{props.tasks.find((task) => task.type === 'script')?.trace?.inputs.find((input) => input.kind === 'provider')?.summary}</div>
+      )}
       <div className="decision-log">
         <div className="subheading">重规划决策</div>
         {decisions.map((event) => (
